@@ -743,3 +743,15 @@ full walkthrough.
 - **2026-06-13: Set Chat as Default View**
   - *Details*: Updated the UI so the Chat view is displayed by default instead of the Knowledge Graph.
   - *Tech Notes*: Modified `backend/static/index.html` to set `<body data-view="chat">`, activated the `#navChat` button, and updated the JavaScript initialization logic to route to `setView("chat")` when no specific hash is provided.
+
+- **2026-06-13: Increased logo size**
+  - *Details*: Increased the dimensions of the UI logo to make it more visible.
+  - *Tech Notes*: Modified the `.mark` CSS class in `backend/static/index.html` to increase width and height to 64px.
+
+- **2026-06-13: Chat welcome logo replaces orbit animation**
+  - *Details*: Replaced the animated orbiting-dots circle in the chat welcome screen with the brand logo (`logo.png`).
+  - *Tech Notes*: In `backend/static/index.html`, swapped `<div class="w-orbit"></div>` for `<img src="/static/logo.png" class="w-logo">`. Removed the `.w-orbit` CSS (and its `::before`/`::after` pseudo-elements) and added a `.w-logo` rule (104px, drop-shadow) with a new `@keyframes float` gentle bob/tilt animation.
+
+- **2026-06-13: Enlarged chat welcome logo, tightened spacing**
+  - *Details*: Made the chat welcome logo larger and reduced the gap between it and the "Ask Al Dente, anything." heading.
+  - *Tech Notes*: In `backend/static/index.html`, updated `.w-logo` width/height 104px → 132px and `margin-bottom` 16px → 4px.

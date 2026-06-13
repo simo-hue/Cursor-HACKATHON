@@ -1,7 +1,9 @@
 # Manual Actions
 
 
-
+- [ ] LLM;
+- [ ] try gemini tests;
+- [ ] potenzialmente aggiungere LLM per gli artefacts;
 
 
 
