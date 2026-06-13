@@ -12,6 +12,7 @@ from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches, Pt, RGBColor
 from fpdf import FPDF
+from fpdf.fonts import FontFace
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -148,16 +149,20 @@ def write_pdf(content: ArtifactContent) -> Path:
     if content.columns and content.rows:
         usable = 182
         widths = [usable / len(content.columns)] * len(content.columns)
-        pdf.set_font("Helvetica", "B", 8)
-        pdf.set_fill_color(232, 180, 79)
-        for index, column in enumerate(content.columns):
-            pdf.cell(widths[index], 7, _ascii(column), border=1, fill=True)
-        pdf.ln()
-        pdf.set_font("Helvetica", "", 7)
-        for row in content.rows:
-            for index, value in enumerate(row):
-                pdf.cell(widths[index], 6, _ascii(value)[:34], border=1)
-            pdf.ln()
+        with pdf.table(
+            col_widths=widths,
+            text_align="LEFT",
+            headings_style=FontFace(color=(35, 29, 23), fill_color=(232, 180, 79), emphasis="B"),
+            cell_fill_color=(255, 255, 255),
+            cell_fill_mode="ALL",
+        ) as table:
+            row = table.row()
+            for col in content.columns:
+                row.cell(_ascii(str(col)))
+            for data_row in content.rows:
+                row = table.row()
+                for datum in data_row:
+                    row.cell(_ascii(str(datum)))
     pdf.set_y(-16)
     pdf.set_font("Helvetica", "I", 7)
     pdf.set_text_color(110, 100, 90)
@@ -187,7 +192,8 @@ def write_xlsx(content: ArtifactContent) -> Path:
             cell.alignment = Alignment(horizontal="center")
         for row_index, row in enumerate(content.rows, header_row + 1):
             for col, value in enumerate(row, 1):
-                sheet.cell(row_index, col, value)
+                cell = sheet.cell(row_index, col, value)
+                cell.alignment = Alignment(wrap_text=True)
         sheet.freeze_panes = f"A{header_row + 1}"
         sheet.auto_filter.ref = (
             f"A{header_row}:{get_column_letter(len(content.columns))}{header_row + len(content.rows)}"
@@ -289,6 +295,50 @@ def write_pptx(content: ArtifactContent) -> Path:
             aspect = img.width / img.height
             w_inches = 1.0 * aspect
             slide.shapes.add_picture(str(LOGO_PATH), left=PptInches(13.333 - w_inches - 0.2), top=PptInches(0.2), height=PptInches(1.0))
+            
+    if content.columns and content.rows:
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        background = slide.background.fill
+        background.solid()
+        background.fore_color.rgb = PptRGBColor(29, 23, 18)
+        
+        # Add table
+        x, y, cx, cy = PptInches(0.8), PptInches(0.8), PptInches(11.7), PptInches(5.0)
+        table = slide.shapes.add_table(len(content.rows) + 1, len(content.columns), x, y, cx, cy).table
+        
+        # Populate headers
+        for col_idx, col_name in enumerate(content.columns):
+            cell = table.cell(0, col_idx)
+            cell.text = str(col_name)
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = PptRGBColor(219, 85, 61)
+            for p in cell.text_frame.paragraphs:
+                p.font.bold = True
+                p.font.color.rgb = PptRGBColor(255, 245, 223)
+                p.font.size = PptPt(14)
+                
+        # Populate data
+        for row_idx, row_data in enumerate(content.rows):
+            is_even = row_idx % 2 == 0
+            bg_color = PptRGBColor(35, 29, 23) if is_even else PptRGBColor(43, 33, 26)
+            for col_idx, cell_value in enumerate(row_data):
+                cell = table.cell(row_idx + 1, col_idx)
+                cell.text = str(cell_value)
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = bg_color
+                for p in cell.text_frame.paragraphs:
+                    p.font.color.rgb = PptRGBColor(255, 245, 223)
+                    p.font.size = PptPt(12)
+                    
+        # Source attribution
+        source_box = slide.shapes.add_textbox(PptInches(0.8), PptInches(6.9), PptInches(11.7), PptInches(0.3))
+        source_p = source_box.text_frame.paragraphs[0]
+        source_p.text = "Sources: " + ", ".join(content.sources)
+        source_p.font.size = PptPt(8)
+        source_p.font.color.rgb = PptRGBColor(150, 132, 112)
+        if LOGO_PATH.exists():
+            slide.shapes.add_picture(str(LOGO_PATH), left=PptInches(13.333 - w_inches - 0.2), top=PptInches(0.2), height=PptInches(1.0))
+            
     presentation.save(path)
     return path
 

@@ -25,6 +25,7 @@ _FILES.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Al Dente Company Brain", version="1.0.0")
 app.mount("/files", StaticFiles(directory=_FILES), name="files")
+app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 orchestrator = Orchestrator()
 graph_builder = GraphBuilder(
     orchestrator.api,

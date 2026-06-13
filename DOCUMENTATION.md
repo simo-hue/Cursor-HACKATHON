@@ -696,6 +696,13 @@ full walkthrough.
     - Added `pillow>=10.4.0` to `pyproject.toml` (required by `openpyxl` for image insertion).
     - Updated `write_pdf`, `write_xlsx`, `write_docx`, and `write_pptx` in `backend/app/artifacts.py` to optionally load and render the logo if it exists in the static directory.
 
+- **2026-06-13: Fixed artifact table column overlapping & added PPTX tables**
+  - *Details*: Ensured that long strings in data tables dynamically wrap instead of bleeding into adjacent cells across all artifact formats. Also added missing table-rendering functionality to PowerPoint artifacts.
+  - *Tech Notes*:
+    - **PDF**: Replaced manual `fpdf2` `cell()` loop with `pdf.table(...)` context manager in `write_pdf` for native multiline cell wrapping. Maintained exact header styles via `FontFace`.
+    - **XLSX**: Added `cell.alignment = Alignment(wrap_text=True)` to data cells in `write_xlsx` to dynamically wrap text.
+    - **PPTX**: Updated `write_pptx` to append a new slide at the end of the deck dedicated to rendering `content.columns` and `content.rows` natively using `slide.shapes.add_table()`. It matches the Al Dente color scheme (`RGB(219, 85, 61)` header, cream text).
+
 - **2026-06-13: Two-view UI redesign — Knowledge Graph + Chat (`backend/static/index.html`)**
   - *Details*: Replaced the old four-box layout (hero + ask composer + answer panel + graph panel)
     with a minimal, modern single-file app driven by a slim top bar holding a centered segmented
@@ -728,3 +735,11 @@ full walkthrough.
       fallback), `/ask` returns the full frozen schema; embedded JS passes `node --check`; both views
       captured via headless Chrome. `smoke_test.py` passes health/ui/kb/artifact/graph (the lone
       `crm` failure is an upstream mock-API `403`, unrelated to the frontend).
+
+- **2026-06-13: UI custom logo insertion**
+  - *Details*: Replaced the default text-based "A" mark logo in the UI (`index.html`) with the user-provided image logo (`logo.png`).
+  - *Tech Notes*: Modified `backend/main.py` to mount the entire `static/` directory to `/static` via `StaticFiles`. Updated `backend/static/index.html` to reference `<img src="/static/logo.png" ...>` and adjusted the CSS rules for `.mark` to properly size and fit the image logo instead of the stylized text.
+
+- **2026-06-13: Set Chat as Default View**
+  - *Details*: Updated the UI so the Chat view is displayed by default instead of the Knowledge Graph.
+  - *Tech Notes*: Modified `backend/static/index.html` to set `<body data-view="chat">`, activated the `#navChat` button, and updated the JavaScript initialization logic to route to `setView("chat")` when no specific hash is provided.
