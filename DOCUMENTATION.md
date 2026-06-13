@@ -755,3 +755,45 @@ full walkthrough.
 - **2026-06-13: Enlarged chat welcome logo, tightened spacing**
   - *Details*: Made the chat welcome logo larger and reduced the gap between it and the "Ask Al Dente, anything." heading.
   - *Tech Notes*: In `backend/static/index.html`, updated `.w-logo` width/height 104px → 132px and `margin-bottom` 16px → 4px.
+
+- **2026-06-13: LLM-composed answers (guarded composer via Regolo)**
+  - *Details*: The Regolo LLM now generates the natural-language `answer` for confident, fully-grounded
+    questions, instead of returning the raw deterministic template string. The deterministic core still
+    fetches all data and computes every number/ID in Python; the LLM only rewrites the prose. A
+    deterministic fallback plus value-aware fact validation guarantees the LLM can never lose a fact,
+    change a number/ID, blow the 30s latency ceiling, or weaken an honesty/trap answer. Design decisions
+    (locked with the user): compose **only** when `evidence.answerable is True AND confidence >= 0.72`;
+    all `answerable=False` cases (traps, not-found, ambiguous), the low-confidence "partial evidence"
+    tier, and **all artifacts** stay 100% deterministic and are never routed through the LLM. `sources`
+    and `verticale` remain fully deterministic. The classify path (rare, low-confidence routes only) is
+    unchanged.
+  - *Tech Notes*:
+    - **`backend/app/normalizers.py`**: added `extract_hard_tokens(text)` and
+      `answer_preserves_tokens(candidate, required)`. Extracts IDs (reusing `ID_PATTERNS`), ISO dates,
+      and numbers; numbers are canonicalized **by value** (thousands separators stripped, trailing zeros
+      trimmed) so `740,000` ≡ `740000` and minor reformatting doesn't trigger a false fallback; IDs
+      matched case-insensitively. New regexes `ISO_DATE_RE`, `NUMBER_RE` and helper `_canonical_number`.
+    - **`backend/app/llm.py`**: replaced the never-called `final_answer()` with a thin
+      `compose(question, anchor, facts) -> str` that builds a curated payload (`_curate_facts`: drops the
+      redundant `answer` key, caps large record lists at `FACTS_LIST_CAP=8`, JSON capped at
+      `FACTS_JSON_CAP=4000`), calls the model with a concise plain-prose system prompt (`COMPOSE_PROMPT`,
+      temp 0, `max_tokens=400`) at a per-request timeout via `with_options(timeout=..., max_retries=0)`,
+      and returns `""` on any error/empty/timeout. `classify` and the (still unused) `generate_artifact_html`
+      are untouched.
+    - **`backend/app/orchestrator.py`**: new `_maybe_compose(...)` owns all policy — skips artifacts
+      (`route.handler == "artifact"`, `artifact_url`, or `artifact_type` in facts), low confidence
+      (`< 0.72`), missing LLM config, or a tight deadline (`ctx.remaining() < compose_min_remaining_seconds`).
+      Otherwise it calls `llm.compose`, validates every hard token from the deterministic answer is
+      present, and returns the composed text or falls back to deterministic. Wired into the confident
+      branch of `answer()`; the composed result is still cached in `answer_cache`.
+    - **`backend/app/config.py`**: added `compose_timeout_seconds: float = 7.0` and
+      `compose_min_remaining_seconds: float = 9.0`.
+    - **Tests** (`backend/tests/test_core.py`): added `HardTokenTests` (extraction + value-equivalence +
+      drop/change detection) and `ComposerPolicyTests` (composes when facts preserved, falls back when a
+      fact is dropped, skips artifact routes, skips low confidence) using a fake LLM — all offline.
+    - **Verification**: full suite `16 passed` (`PYTHONPATH=. ./.venv/bin/python tests/test_core.py -v`).
+      Live end-to-end `scripts/smoke_test.py` → `6 passed, 0 failed`, with two real
+      `POST https://api.regolo.ai/v1/chat/completions 200` calls (KB + CRM answers composed, facts
+      `36 months/gluten/soy/mustard` and `740` preserved) and **no** Regolo call on the artifact path;
+      total run ~4.3s, each `/ask` well under the 30s ceiling. Model `mistral-small-4-119b` confirmed live.
+    - No new dependencies; no `/ask` schema change.

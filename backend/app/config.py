@@ -28,6 +28,8 @@ class Settings(BaseModel):
     ).rstrip("/")
     request_timeout_seconds: float = 5.0
     llm_timeout_seconds: float = 5.0
+    compose_timeout_seconds: float = 7.0
+    compose_min_remaining_seconds: float = 9.0
     ask_timeout_seconds: float = 28.0
     cache_ttl_seconds: int = 900
     cache_max_entries: int = 512

@@ -7,7 +7,10 @@ from fastapi.testclient import TestClient
 
 from app.api_client import AlDenteAPI
 from app.config import Settings
-from app.router import classify_fast
+from app.evidence import EvidencePack
+from app.normalizers import answer_preserves_tokens, extract_hard_tokens
+from app.orchestrator import Orchestrator
+from app.router import FastRoute, classify_fast
 from main import app
 
 
@@ -95,6 +98,99 @@ class RouterTests(unittest.TestCase):
             classify_fast("Does a customer named Supermercati Bianchi exist?").handler,
             "crm_customer_lookup",
         )
+
+
+class HardTokenTests(unittest.TestCase):
+    def test_extracts_ids_dates_and_numbers(self) -> None:
+        tokens = extract_hard_tokens(
+            "CALL-58020 on 2026-06-06 about LOT-2026-0658, total 740,000 EUR across 4 deals."
+        )
+        self.assertIn("ID:CALL-58020", tokens)
+        self.assertIn("ID:LOT-2026-0658", tokens)
+        self.assertIn("DATE:2026-06-06", tokens)
+        self.assertIn("NUM:740000", tokens)
+        self.assertIn("NUM:4", tokens)
+
+    def test_number_value_equivalence(self) -> None:
+        required = extract_hard_tokens("Total 740,000 EUR.")
+        self.assertTrue(answer_preserves_tokens("The total is 740000 euros.", required))
+
+    def test_detects_dropped_number(self) -> None:
+        required = extract_hard_tokens("462 cartons against a 2,000 minimum.")
+        self.assertFalse(answer_preserves_tokens("It is below minimum.", required))
+
+    def test_detects_changed_id(self) -> None:
+        required = extract_hard_tokens("Lot LOT-2026-0658 is blocked.")
+        self.assertFalse(answer_preserves_tokens("Lot LOT-2026-0659 is blocked.", required))
+
+    def test_empty_required_passes(self) -> None:
+        self.assertTrue(answer_preserves_tokens("anything", set()))
+
+
+class _FakeLLM:
+    def __init__(self, reply: str) -> None:
+        self.reply = reply
+        self.calls = 0
+
+    def compose(self, question: str, anchor: str, facts: Any) -> str:
+        self.calls += 1
+        return self.reply
+
+
+class ComposerPolicyTests(unittest.TestCase):
+    def _orchestrator(self, reply: str) -> Orchestrator:
+        settings = Settings(
+            llm_base_url="http://llm.test/v1",
+            llm_api_key="test-key",
+            model="test-model",
+            mock_api_token="test",
+        )
+        orchestrator = Orchestrator(settings)
+        orchestrator.llm = _FakeLLM(reply)  # type: ignore[assignment]
+        return orchestrator
+
+    def test_composes_when_facts_preserved(self) -> None:
+        orchestrator = self._orchestrator(
+            "Primato has 4 open opportunities worth 740,000 EUR."
+        )
+        deterministic = "4 open opportunities worth 740,000 EUR."
+        evidence = EvidencePack(True, "crm", {"answer": deterministic}, confidence=0.98)
+        ctx = orchestrator._context()
+        route = FastRoute("crm_open_opportunities", "crm", 0.98)
+        result = orchestrator._maybe_compose("q", route, evidence, deterministic, ctx)
+        self.assertEqual(result, "Primato has 4 open opportunities worth 740,000 EUR.")
+        self.assertEqual(orchestrator.llm.calls, 1)  # type: ignore[attr-defined]
+
+    def test_falls_back_when_fact_dropped(self) -> None:
+        orchestrator = self._orchestrator("Primato has several open opportunities.")
+        deterministic = "4 open opportunities worth 740,000 EUR."
+        evidence = EvidencePack(True, "crm", {"answer": deterministic}, confidence=0.98)
+        ctx = orchestrator._context()
+        route = FastRoute("crm_open_opportunities", "crm", 0.98)
+        result = orchestrator._maybe_compose("q", route, evidence, deterministic, ctx)
+        self.assertEqual(result, deterministic)
+
+    def test_skips_artifact_route(self) -> None:
+        orchestrator = self._orchestrator("should not be used")
+        deterministic = "<html>deck</html>"
+        evidence = EvidencePack(
+            True, "crm", {"answer": deterministic, "artifact_type": "html"}, confidence=0.96
+        )
+        ctx = orchestrator._context()
+        route = FastRoute("artifact", "crm", 0.98)
+        result = orchestrator._maybe_compose("q", route, evidence, deterministic, ctx)
+        self.assertEqual(result, deterministic)
+        self.assertEqual(orchestrator.llm.calls, 0)  # type: ignore[attr-defined]
+
+    def test_skips_low_confidence(self) -> None:
+        orchestrator = self._orchestrator("nope")
+        deterministic = "Some grounded answer."
+        evidence = EvidencePack(True, "crm", {"answer": deterministic}, confidence=0.5)
+        ctx = orchestrator._context()
+        route = FastRoute("generic", "crm", 0.5)
+        result = orchestrator._maybe_compose("q", route, evidence, deterministic, ctx)
+        self.assertEqual(result, deterministic)
+        self.assertEqual(orchestrator.llm.calls, 0)  # type: ignore[attr-defined]
 
 
 class ContractTests(unittest.TestCase):

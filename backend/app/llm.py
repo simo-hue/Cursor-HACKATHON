@@ -15,6 +15,39 @@ Sources available: crm, erp, calls, kb.
 Extract IDs, customer names, SKUs, lots, calls, document IDs, requested artifact type,
 and likely intent. If uncertain, use null or empty arrays. Never invent entities."""
 
+COMPOSE_PROMPT = (
+    "You rewrite a verified internal answer for Al Dente S.r.l. into clear, natural prose. "
+    "Use ONLY the verified answer and the evidence provided; never add, infer, or estimate "
+    "any fact. Preserve every ID, code, date, currency figure and number exactly as given. "
+    "Reply in the same language as the question, in 1-4 concise sentences of plain text - "
+    "no markdown, no headings, no bullet lists. Output only the answer text."
+)
+
+FACTS_LIST_CAP = 8
+FACTS_JSON_CAP = 4000
+
+
+def _curate_facts(facts: Any) -> dict[str, Any]:
+    """Trim the evidence facts into a compact payload for the prompt.
+
+    Drops the redundant deterministic 'answer' (passed separately as the anchor)
+    and caps large record lists so prompts stay short and cheap.
+    """
+    if not isinstance(facts, dict):
+        return {}
+    curated: dict[str, Any] = {}
+    for key, value in facts.items():
+        if key == "answer":
+            continue
+        if isinstance(value, list):
+            trimmed = list(value[:FACTS_LIST_CAP])
+            if len(value) > FACTS_LIST_CAP:
+                trimmed.append(f"... (+{len(value) - FACTS_LIST_CAP} more)")
+            curated[key] = trimmed
+        else:
+            curated[key] = value
+    return curated
+
 
 class LLMClient:
     def __init__(self, settings: Settings | None = None) -> None:
@@ -85,16 +118,37 @@ class LLMClient:
         except Exception:
             return ""
 
-    def final_answer(self, question: str, evidence: Any) -> str:
-        payload = asdict(evidence) if hasattr(evidence, "__dataclass_fields__") else evidence
-        return self._complete(
-            (
-                "Write a concise English answer using only the evidence JSON. "
-                "Do not add facts, estimates, or outside knowledge. Preserve every ID "
-                "and number exactly. If evidence is insufficient, explain what is missing."
-            ),
-            f"Question: {question}\nEvidence: {json.dumps(payload, default=str)}",
+    def compose(self, question: str, anchor: str, facts: Any) -> str:
+        """Rewrite a verified deterministic answer into natural prose.
+
+        Returns an empty string on any failure, empty response, or timeout so the
+        caller can fall back to the deterministic answer. All policy (when to call,
+        token validation) lives in the orchestrator.
+        """
+        if not self._client or not self.settings.model:
+            return ""
+        curated = json.dumps(_curate_facts(facts), default=str)[:FACTS_JSON_CAP]
+        prompt = (
+            f"Question: {question}\n"
+            f"Verified answer: {anchor}\n"
+            f"Evidence: {curated}"
         )
+        try:
+            response = self._client.with_options(
+                timeout=self.settings.compose_timeout_seconds,
+                max_retries=0,
+            ).chat.completions.create(
+                model=self.settings.model,
+                temperature=0,
+                max_tokens=400,
+                messages=[
+                    {"role": "system", "content": COMPOSE_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+            )
+            return self._response_text(response)
+        except Exception:
+            return ""
 
     def generate_artifact_html(self, question: str, evidence: Any) -> str:
         payload = asdict(evidence) if hasattr(evidence, "__dataclass_fields__") else evidence

@@ -6,6 +6,7 @@ import time
 from .api_client import AlDenteAPI, APIConfigurationError, APIError
 from .cache import TTLCache
 from .config import Settings, get_settings
+from .evidence import EvidencePack
 from .handlers import Context
 from .handlers.artifacts_handler import handle_artifact
 from .handlers.calls import (
@@ -33,7 +34,7 @@ from .handlers.generic import handle_generic
 from .handlers.kb_handlers import handle_generic_kb, handle_price, handle_product_spec
 from .kb import KnowledgeBase
 from .llm import LLMClient
-from .normalizers import normalize_text
+from .normalizers import answer_preserves_tokens, extract_hard_tokens, normalize_text
 from .router import FastRoute, classify_fast, needs_llm_classification
 from .schemas import AskResponse
 
@@ -82,6 +83,36 @@ class Orchestrator:
             route.handler = "kb_generic"
             route.confidence = 0.7
         return route
+
+    def _maybe_compose(
+        self,
+        question: str,
+        route: FastRoute,
+        evidence: EvidencePack,
+        deterministic: str,
+        ctx: Context,
+    ) -> str:
+        """Let the LLM rewrite a confident, fully-grounded answer into natural prose.
+
+        Falls back to the deterministic answer whenever composition is unsafe or
+        unavailable: artifacts, low confidence, no LLM configured, the latency
+        budget is tight, the model fails/times out, or it drops a hard fact.
+        """
+        if route.handler == "artifact" or evidence.artifact_url:
+            return deterministic
+        if "artifact_type" in evidence.facts:
+            return deterministic
+        if not (evidence.answerable and evidence.confidence >= 0.72):
+            return deterministic
+        if not self.settings.has_llm:
+            return deterministic
+        if ctx.remaining() < self.settings.compose_min_remaining_seconds:
+            return deterministic
+        required = extract_hard_tokens(deterministic)
+        composed = self.llm.compose(question, deterministic, evidence.facts)
+        if composed and answer_preserves_tokens(composed, required):
+            return composed
+        return deterministic
 
     def answer(self, question: str) -> AskResponse:
         normalized = normalize_text(question)
@@ -148,9 +179,10 @@ class Orchestrator:
                 + (evidence.answer or "Required fields were missing from the checked sources.")
             )
         else:
-            answer = evidence.answer or (
+            deterministic = evidence.answer or (
                 "Not available from the checked Al Dente sources."
             )
+            answer = self._maybe_compose(question, route, evidence, deterministic, ctx)
         response = AskResponse(
             answer=answer,
             sources=list(dict.fromkeys(evidence.sources)),

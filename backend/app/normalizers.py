@@ -22,6 +22,9 @@ COMPANY_SUFFIX_RE = re.compile(
     r"\b(?:s\s*p\s*a|spa|s\s*r\s*l|srl|societa per azioni)\b", re.I
 )
 
+ISO_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
 
 def normalize_text(value: str) -> str:
     value = unicodedata.normalize("NFKD", value or "")
@@ -41,6 +44,48 @@ def extract_ids(question: str) -> dict[str, list[str]]:
         key: list(dict.fromkeys(re.findall(pattern, upper)))
         for key, pattern in ID_PATTERNS.items()
     }
+
+
+def _canonical_number(token: str) -> str | None:
+    cleaned = token.replace(",", "")
+    if not cleaned or not cleaned[0].isdigit():
+        return None
+    if "." in cleaned:
+        cleaned = cleaned.rstrip("0").rstrip(".")
+    return cleaned or "0"
+
+
+def extract_hard_tokens(text: str) -> set[str]:
+    """Extract the facts an answer must keep: IDs, ISO dates and numbers.
+
+    Numbers are canonicalized by value (thousands separators stripped, trailing
+    zeros trimmed) so that "740,000" and "740000" are treated as the same fact.
+    IDs are matched case-insensitively. This lets us verify an LLM-composed
+    answer preserved every hard fact regardless of harmless reformatting.
+    """
+    tokens: set[str] = set()
+    if not text:
+        return tokens
+    working = text.upper()
+    for pattern in ID_PATTERNS.values():
+        for match in re.findall(pattern, working):
+            tokens.add(f"ID:{match.upper()}")
+            working = working.replace(match, " ")
+    for match in ISO_DATE_RE.findall(working):
+        tokens.add(f"DATE:{match}")
+        working = working.replace(match, " ")
+    for match in NUMBER_RE.findall(working):
+        canonical = _canonical_number(match)
+        if canonical is not None:
+            tokens.add(f"NUM:{canonical}")
+    return tokens
+
+
+def answer_preserves_tokens(candidate: str, required: set[str]) -> bool:
+    """True when every required hard token is present in the candidate text."""
+    if not required:
+        return True
+    return required <= extract_hard_tokens(candidate)
 
 
 def is_aggregate_question(question: str) -> bool:
