@@ -17,7 +17,6 @@ from . import (
     Context,
     customer_id,
     customer_name,
-    get_customer_index,
     missing_customer_answer,
     resolve_customer,
 )
@@ -149,18 +148,28 @@ def handle_open_opportunities(question: str, ctx: Context) -> EvidencePack:
 
 def handle_negotiation_by_channel(question: str, ctx: Context) -> EvidencePack:
     opportunities = ctx.api.list_opportunities(stage="negotiation")
-    customers = get_customer_index(ctx)
-    by_id = {customer_id(row): row for row in customers}
+    opportunity_customer_ids = {
+        str(first_value(row, "customer_id", default=""))
+        for row in opportunities
+        if first_value(row, "customer_id")
+    }
+    customers = []
+    for channel in ("GDO", "distributor", "horeca"):
+        customers.extend(ctx.api.search_customers(channel=channel))
+    channel_by_customer_id = {
+        customer_id(row): str(first_value(row, "channel", default="unknown"))
+        for row in customers
+        if customer_id(row) in opportunity_customer_ids
+    }
     totals: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     counts: defaultdict[str, int] = defaultdict(int)
     missing_customers = 0
     for opportunity in opportunities:
         cid = str(first_value(opportunity, "customer_id", default=""))
-        customer = by_id.get(cid)
-        if not customer:
+        channel = channel_by_customer_id.get(cid)
+        if not channel:
             missing_customers += 1
             continue
-        channel = str(first_value(customer, "channel", default="unknown"))
         totals[channel] += _opportunity_value(opportunity)
         counts[channel] += 1
     ordered = ["GDO", "distributor", "horeca"]

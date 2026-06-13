@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+from app.config import get_settings  # noqa: E402
 from main import app  # noqa: E402
 
 
@@ -21,6 +22,7 @@ def assert_schema(payload: dict) -> None:
 
 def main() -> int:
     client = TestClient(app)
+    settings = get_settings()
     checks: list[tuple[str, bool, str]] = []
 
     health = client.get("/health")
@@ -41,7 +43,7 @@ def main() -> int:
         kb_ok = False
     checks.append(("kb question", kb.status_code == 200 and kb_ok, str(kb_payload)))
 
-    if os.getenv("MOCK_API_TOKEN"):
+    if settings.has_mock_api:
         crm = client.post(
             "/ask",
             json={"question": "How many open opportunities does CUST-0132 have, and what is their total value?"},

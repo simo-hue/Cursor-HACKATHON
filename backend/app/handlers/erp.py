@@ -230,6 +230,17 @@ def _find_lot(question: str, ctx: Context) -> tuple[str | None, dict[str, Any] |
         resolved = resolve_customer(question, ctx)
         if resolved.record:
             filters["customer_id"] = customer_id(resolved.record)
+    if lot_id:
+        lot = ctx.api.find_production_order_by_lot(
+            lot_id,
+            customer_id=filters.get("customer_id"),
+            sku=filters.get("sku"),
+        )
+        if lot and ids["order_ids"]:
+            if str(first_value(lot, "order_id", default="")) != ids["order_ids"][0]:
+                lot = None
+        return lot_id, lot
+
     lots = ctx.api.list_production_orders(**filters)
     if ids["order_ids"]:
         lots = [
@@ -237,9 +248,6 @@ def _find_lot(question: str, ctx: Context) -> tuple[str | None, dict[str, Any] |
             for row in lots
             if str(first_value(row, "order_id", default="")) == ids["order_ids"][0]
         ]
-    if lot_id:
-        lot = next((row for row in lots if record_id(row, "lot_id") == lot_id), None)
-        return lot_id, lot
     lots = sort_records_newest(lots)
     return (record_id(lots[0], "lot_id"), lots[0]) if lots else (None, None)
 
@@ -248,10 +256,15 @@ def handle_lot_status(question: str, ctx: Context) -> EvidencePack:
     lot_id, lot = _find_lot(question, ctx)
     if not lot:
         requested = lot_id or "the requested criteria"
+        answer = (
+            f"Lot {lot_id} was not found in the production orders available."
+            if lot_id
+            else f"No production lot was found for {requested}."
+        )
         return EvidencePack(
             False,
             "erp",
-            {"answer": f"No production lot was found for {requested}."},
+            {"answer": answer},
             ["erp/production-orders"],
             confidence=0.97,
         )

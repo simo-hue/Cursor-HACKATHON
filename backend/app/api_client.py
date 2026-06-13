@@ -162,6 +162,31 @@ class AlDenteAPI:
     def list_production_orders(self, **filters: Any) -> list[dict[str, Any]]:
         return self.list_all("/erp/production-orders", filters)
 
+    def find_production_order_by_lot(
+        self,
+        lot_id: str,
+        customer_id: str | None = None,
+        sku: str | None = None,
+    ) -> dict[str, Any] | None:
+        filters = {
+            key: value
+            for key, value in {"customer_id": customer_id, "sku": sku}.items()
+            if value
+        }
+        rows = self.list_all(
+            "/erp/production-orders",
+            filters,
+            max_pages=None if filters else 5,
+        )
+        return next(
+            (
+                row
+                for row in rows
+                if str(row.get("lot_id") or row.get("id") or "") == lot_id
+            ),
+            None,
+        )
+
     def list_inventory(self, **filters: Any) -> list[dict[str, Any]]:
         return self.list_all("/erp/inventory", filters)
 

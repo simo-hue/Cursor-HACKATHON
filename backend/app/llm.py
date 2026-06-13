@@ -28,6 +28,17 @@ class LLMClient:
                 max_retries=1,
             )
 
+    @staticmethod
+    def _response_text(response: Any) -> str:
+        message = response.choices[0].message
+        content = message.content or ""
+        if not content:
+            content = getattr(message, "reasoning_content", "") or ""
+        content = content.strip()
+        if not content:
+            raise ValueError("LLM returned no content or reasoning_content.")
+        return content
+
     def classify(self, question: str) -> dict[str, Any]:
         if not self._client or not self.settings.model:
             return {}
@@ -51,8 +62,7 @@ class LLMClient:
                     },
                 ],
             )
-            message = response.choices[0].message
-            content = message.content or getattr(message, "reasoning_content", "") or ""
+            content = self._response_text(response)
             match = re.search(r"\{.*\}", content, re.S)
             return json.loads(match.group(0)) if match else {}
         except Exception:
@@ -71,8 +81,7 @@ class LLMClient:
                     {"role": "user", "content": prompt},
                 ],
             )
-            message = response.choices[0].message
-            return (message.content or getattr(message, "reasoning_content", "") or "").strip()
+            return self._response_text(response)
         except Exception:
             return ""
 

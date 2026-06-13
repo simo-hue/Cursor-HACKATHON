@@ -26,7 +26,7 @@ class Settings(BaseModel):
     public_base_url: str = os.getenv(
         "PUBLIC_BASE_URL", "http://localhost:8000"
     ).rstrip("/")
-    request_timeout_seconds: float = 4.5
+    request_timeout_seconds: float = 5.0
     llm_timeout_seconds: float = 5.0
     ask_timeout_seconds: float = 28.0
     cache_ttl_seconds: int = 900

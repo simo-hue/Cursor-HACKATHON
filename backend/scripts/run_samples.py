@@ -9,6 +9,10 @@ from urllib.parse import urlparse
 
 import httpx
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+from app.config import get_settings  # noqa: E402
+
 
 @dataclass
 class Sample:
@@ -49,7 +53,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=30.0)
     args = parser.parse_args()
     base_url = args.base_url.rstrip("/")
-    has_token = bool(os.getenv("MOCK_API_TOKEN"))
+    has_token = get_settings().has_mock_api
     hostname = urlparse(base_url).hostname
     is_local = hostname in {"localhost", "127.0.0.1", "::1"}
     passed = failed = skipped = 0
