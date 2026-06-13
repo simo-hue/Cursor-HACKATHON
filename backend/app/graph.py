@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .api_client import AlDenteAPI, APIError
@@ -64,17 +65,50 @@ class GraphBuilder:
                 "data": {"id": identifier, "source": source, "target": target, "label": label}
             }
 
-        add_node("KB-POLICY", "Policies", "hub")
+        def is_spec_sheet(title: str) -> bool:
+            lowered = title.lower()
+            return lowered.startswith("product specification") or "spec sheet" in lowered
+
+        def kb_category(title: str) -> tuple[str, str]:
+            lowered = title.lower()
+            if "price" in lowered:
+                return "KB-PRICING", "Pricing"
+            if "policy" in lowered:
+                return "KB-POLICY", "Policies"
+            if any(
+                keyword in lowered
+                for keyword in (
+                    "procedure",
+                    "plan",
+                    "program",
+                    "monitoring",
+                    "ccp",
+                    "haccp",
+                    "recall",
+                    "qc",
+                    "detection",
+                )
+            ):
+                return "KB-PROCEDURE", "Procedures"
+            return "KB-STANDARD", "Standards & Compliance"
+
+        spec_prefix = re.compile(
+            r"^(Product Specification Sheet|Product Specification|Spec Sheet|Spec sheet)\s*[-–]\s*",
+            re.I,
+        )
         product_skus: list[str] = []
         for doc in self.kb.documents:
-            add_node(doc.doc_id, doc.title.replace("Product Specification Sheet - ", ""), "kb_doc")
-            if doc.sku:
+            label = spec_prefix.sub("", doc.title).strip() or doc.doc_id
+            add_node(doc.doc_id, label, "kb_doc")
+            if is_spec_sheet(doc.title) and doc.sku:
                 spec = extract_product_spec(doc.text)
                 add_node(doc.sku, spec.get("product") or doc.sku, "product")
                 add_edge(doc.doc_id, doc.sku, "specifies")
                 product_skus.append(doc.sku)
             else:
-                add_edge("KB-POLICY", doc.doc_id, "contains")
+                hub_id, hub_label = kb_category(doc.title)
+                add_node(hub_id, hub_label, "hub")
+                add_edge(hub_id, doc.doc_id, "contains")
 
         if not self.api.settings.has_mock_api:
             result = {

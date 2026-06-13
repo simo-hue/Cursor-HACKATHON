@@ -637,4 +637,50 @@ full walkthrough.
     (`uv run python -m unittest discover -s tests`) — 7/7 passing — to confirm the documented
     behavior reflects the working state.
 
+- **2026-06-13: Fixed UI title for smoke test**
+  - *Details*: Updated the title in `backend/static/index.html` from "Al Dente · Company Brain" to "Al Dente Company Brain" to pass the `smoke_test.py` UI check.
+  - *Tech Notes*: `uv run python scripts/smoke_test.py` now passes with 6/6 checks OK.
 
+- **2026-06-13: Full UI + knowledge-graph redesign (L2 deliverable)**
+  - *Details*: Rebuilt `backend/static/index.html` end-to-end into a professional, bug-free
+    "company brain" workspace, and overhauled the knowledge-graph visualization (the scored L2
+    deliverable). Goals were clarity, usability and a polished, distinctive look.
+    - **Design system**: new warm-espresso palette with stronger contrast, Fraunces display
+      serif + Manrope + DM Mono, glass panels, refined topbar with live status pill and a live
+      graph-size metric, compact hero, sample-question chips that now auto-submit.
+    - **Answer panel**: markdown/iframe rendering, verticale badge colour-coded (crm/erp/calls/kb)
+      with a guard for undefined values, source count badge, a Copy button, styled tables/code,
+      loading + error states, and **clickable source chips** — any `DOC-/PAS-/RAW-/SUP-/CUST-/…`
+      id in the sources focuses and opens that node in the graph (answer ↔ graph linkage).
+    - **Knowledge graph**: migrated layout to **fcose** (organic, component-packed) with an
+      automatic fallback to the built-in `cose` if the CDN is unavailable; entity type is encoded
+      by both **colour and shape** (customers, opportunities, orders, lots, products, raw
+      materials, suppliers, calls, documents, hubs); node size scales with degree; a clear
+      **legend with live counts** that doubles as a **click-to-filter** (isolates a type + its
+      neighbours and refits); **zoom in/out, fit, re-arrange and focus-mode (fullscreen)**
+      controls; a **node search** (`/` shortcut) that highlights matches and fits to them;
+      **hover neighbour-highlight + tooltip** and **click-to-pin** with a formatted **inspector**
+      (key/value fields, `Below minimum`/`In stock` tags) that replaced the old raw-JSON dump and
+      offers context-aware "Ask about this"; a graceful **degraded "Knowledge view"** banner when
+      the company APIs are not reachable; loading skeleton; full keyboard support (⌘/Ctrl+Enter,
+      `/`, Esc); responsive down to mobile.
+  - *Tech Notes*:
+    - New runtime (browser, CDN) deps in `index.html`: `layout-base`, `cose-base`,
+      `cytoscape-fcose` (fcose layout) and the **Fraunces** Google font. No Python deps added.
+    - No endpoint/schema changes. `/ask`, `/graph-data` and the title string remain intact, so
+      `scripts/smoke_test.py` still passes **6/6** (health, ui, kb, crm `740`, binary PDF, graph).
+    - Verified by rendering with headless Chrome: KB-only fallback **and** the live full graph
+      (**230 nodes / 170 edges**, all 10 entity types) render correctly; answer flow, neighbour
+      highlight and inspector confirmed in a screenshot pass.
+
+- **2026-06-13: Graph builder correctness fix (`backend/app/graph.py`)**
+  - *Details*: The graph misclassified the **Wholesale Price List** (`DOC-015`, and any non-spec
+    doc that merely *mentions* a SKU) as a product spec, creating a bogus `specifies` edge and a
+    product node mislabelled "Wholesale Price List 2026". Now a doc is treated as a product spec
+    only when its title is an actual spec sheet (`Product Specification` / `Spec sheet`). All
+    other documents are grouped under semantic category hubs — **Policies, Procedures, Standards
+    & Compliance, Pricing** — and product/spec labels are cleaned of their boilerplate prefix.
+  - *Tech Notes*: Added `import re`; introduced `is_spec_sheet()`, `kb_category()` and a prefix
+    cleaner inside `GraphBuilder.build()`. KB-only graph now reports 4 hubs with correct labels;
+    `PAS-SPA-500` is correctly labelled "Spaghetti n.5 - 500g box". No API/contract impact
+    (graph endpoint only).
