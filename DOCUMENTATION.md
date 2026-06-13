@@ -688,3 +688,43 @@ full walkthrough.
 - **2026-06-13: Removed suggested questions from UI**
   - *Details*: Removed the sample questions chips under the "Find the answer" button in the Ask the Brain section.
   - *Tech Notes*: Modified `backend/static/index.html` to hide the `<div class="chips" id="chips">` element using `style="display: none;"` and removed its `<button>` children. No JS logic changes required, `querySelectorAll` returns empty list and executes flawlessly.
+
+- **2026-06-13: Added custom logo to generated artifacts**
+  - *Details*: Inserted the user's custom `logo.png` into the top-right corner of all downloadable binary artifacts (PDF, XLSX, DOCX, PPTX). The logo scales proportionally to roughly 0.5 inches in height to remain unobtrusive.
+  - *Tech Notes*: 
+    - Moved `logo.png` to `backend/static/logo.png`.
+    - Added `pillow>=10.4.0` to `pyproject.toml` (required by `openpyxl` for image insertion).
+    - Updated `write_pdf`, `write_xlsx`, `write_docx`, and `write_pptx` in `backend/app/artifacts.py` to optionally load and render the logo if it exists in the static directory.
+
+- **2026-06-13: Two-view UI redesign — Knowledge Graph + Chat (`backend/static/index.html`)**
+  - *Details*: Replaced the old four-box layout (hero + ask composer + answer panel + graph panel)
+    with a minimal, modern single-file app driven by a slim top bar holding a centered segmented
+    control that toggles two full-screen views. Backend untouched; the `/ask` and `/graph-data`
+    contracts and the page title are unchanged.
+    - **Knowledge graph view (default)**: the Cytoscape graph now fills the viewport with a floating
+      macOS-Spotlight-style bar centered over it. The bar is unified: typing shows instant local
+      node suggestions (find a customer/product/supplier), while Enter asks the brain. The grounded
+      answer expands in a result panel directly below the bar (markdown, verticale badge, source
+      chips, copy, inline-HTML iframe / artifact download). On every answer the cited entities are
+      parsed from `sources` + answer text via `NODE_ID_RE`, then **highlighted and pan/zoomed to**
+      in the live graph; source chips remain click-to-focus. Legend filters, node inspector and
+      zoom/fit/relayout controls are kept but restyled to fade in on hover; the inspector's
+      "Ask about this" now drives the Spotlight bar. Degraded "Knowledge view" banner preserved.
+    - **Chat view**: a classic centered conversation thread with a bottom composer (Enter to send,
+      Shift+Enter newline, ⌘/Ctrl+Enter also sends). Each turn is an **independent** `POST /ask`
+      (no client-side context stuffing — the regex router and answer cache key off the raw question,
+      so injecting prior turns would risk misrouting and added latency); history is kept client-side
+      for the chat feel. Assistant bubbles render full markdown + badges/sources/artifacts; clicking
+      a source chip that maps to a node switches to the graph view and focuses it.
+    - **Shared/UX**: one `askBrain()` service + `buildAnswerMarkup()`/`wireAnswer()` helpers shared
+      by both views; example-prompt empty states in the Spotlight dropdown and Chat welcome; `⌘/Ctrl+K`
+      and `/` jump to Spotlight, `Esc` dismisses result/inspector; added `#graph`/`#chat` URL-hash
+      deep-linking for shareable views; refined the warm Al Dente palette; responsive down to mobile.
+  - *Tech Notes*:
+    - No new dependencies; reuses the existing CDN scripts (Cytoscape + fcose, `marked`) and fonts.
+    - No backend/endpoint/schema changes. Title kept as `Al Dente Company Brain` so `smoke_test.py`
+      UI check still passes.
+    - Verified locally: `/` 200 with all view markers, `/graph-data` 57 nodes/35 edges (KB-only
+      fallback), `/ask` returns the full frozen schema; embedded JS passes `node --check`; both views
+      captured via headless Chrome. `smoke_test.py` passes health/ui/kb/artifact/graph (the lone
+      `crm` failure is an upstream mock-API `403`, unrelated to the frontend).

@@ -20,8 +20,11 @@ from pptx.dml.color import RGBColor as PptRGBColor
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches as PptInches
 from pptx.util import Pt as PptPt
+from openpyxl.drawing.image import Image as ExcelImage
 
 from .config import BACKEND_DIR, Settings
+
+LOGO_PATH = BACKEND_DIR / "static" / "logo.png"
 
 ESPRESSO = "1D1712"
 GOLD = "E8B44F"
@@ -117,6 +120,13 @@ def write_pdf(content: ArtifactContent) -> Path:
     pdf.add_page()
     pdf.set_fill_color(29, 23, 18)
     pdf.rect(0, 0, 210, 42, "F")
+    if LOGO_PATH.exists():
+        from PIL import Image as PILImage
+        img = PILImage.open(LOGO_PATH).convert("RGBA")
+        bg = PILImage.new("RGBA", img.size, (29, 23, 18, 255))
+        pdf_img = PILImage.alpha_composite(bg, img).convert("RGB")
+        w_mm = 25.4 * (img.width / img.height)
+        pdf.image(pdf_img, x=210 - w_mm - 5, y=5, h=25.4)
     pdf.set_text_color(232, 180, 79)
     pdf.set_font("Helvetica", "B", 22)
     pdf.set_xy(14, 13)
@@ -193,6 +203,13 @@ def write_xlsx(content: ArtifactContent) -> Path:
     notes.column_dimensions["A"].width = 28
     notes.column_dimensions["B"].width = 100
     notes.freeze_panes = "A2"
+    if LOGO_PATH.exists():
+        img = ExcelImage(LOGO_PATH)
+        aspect = img.width / img.height
+        img.height = 96
+        img.width = int(96 * aspect)
+        logo_col = get_column_letter(max(len(content.columns) + 2, 8))
+        sheet.add_image(img, f"{logo_col}1")
     workbook.save(path)
     return path
 
@@ -221,6 +238,13 @@ def write_docx(content: ArtifactContent) -> Path:
             for index, value in enumerate(row):
                 cells[index].text = str(value)
     document.add_paragraph("Sources: " + ", ".join(content.sources)).runs[0].font.size = Pt(8)
+    if LOGO_PATH.exists():
+        header = section.header
+        section.header_distance = Inches(0.2)
+        header_para = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
+        header_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        run = header_para.add_run()
+        run.add_picture(str(LOGO_PATH), height=Inches(1.0))
     document.save(path)
     return path
 
@@ -259,6 +283,12 @@ def write_pptx(content: ArtifactContent) -> Path:
         source_p.text = "Sources: " + ", ".join(content.sources)
         source_p.font.size = PptPt(8)
         source_p.font.color.rgb = PptRGBColor(150, 132, 112)
+        if LOGO_PATH.exists():
+            from PIL import Image as PILImage
+            img = PILImage.open(LOGO_PATH)
+            aspect = img.width / img.height
+            w_inches = 1.0 * aspect
+            slide.shapes.add_picture(str(LOGO_PATH), left=PptInches(13.333 - w_inches - 0.2), top=PptInches(0.2), height=PptInches(1.0))
     presentation.save(path)
     return path
 
