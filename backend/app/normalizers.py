@@ -142,6 +142,14 @@ def is_aggregate_question(question: str) -> bool:
     )
 
 
+_ARTIFACT_ACTION_WORDS = {
+    "generate", "create", "build", "compose", "draft", "prepare", "produce",
+    "deck", "slide", "slides", "presentation", "powerpoint", "brochure",
+    "one-pager", "onepager",
+}
+_ARTIFACT_DECK_WORDS = {"deck", "slide", "slides", "presentation", "powerpoint"}
+
+
 def is_artifact_request(question: str) -> tuple[bool, str | None]:
     q = normalize_text(question)
     explicit = {
@@ -155,31 +163,98 @@ def is_artifact_request(question: str) -> tuple[bool, str | None]:
     for artifact_type, terms in explicit.items():
         if any(term in q for term in terms):
             return True, artifact_type
-    if any(term in q for term in ("generate", "create", "make", "deck", "report")):
-        return True, "html" if any(term in q for term in ("deck", "slide")) else None
+    # Whole-word match so verbs inside other words ("reported" -> "report",
+    # "remake" -> "make") do not falsely trigger artifact generation.
+    words = set(q.split())
+    if words & _ARTIFACT_ACTION_WORDS:
+        return True, "html" if (words & _ARTIFACT_DECK_WORDS) else None
+    # "a report"/"the report" as a deliverable noun (without a verb above).
+    if re.search(r"\b(?:a|an|the|this|that|one)\s+report\b", q):
+        return True, None
     return False, None
+
+
+# A captured company name ends at a stop token: punctuation that cannot be part
+# of a name (':' '/' '(' ')' ',' '?') or a following clause keyword. The ':' and
+# '/' matter for prompts like "...S.p.A.: profile" or "order/lot status", where
+# the colon previously blocked extraction entirely.
+_NAME = r"([A-Z][\w&'. -]{2,80}?)"
+# Case-sensitive variant: the first letter must be uppercase even when the
+# overall search runs case-insensitively. Used by the loosely-anchored
+# possessive / subject-verb patterns so they don't latch onto lowercase filler
+# words ("what's", "did we ...").
+_NAME_CS = r"((?-i:[A-Z])[\w&'. -]{2,80}?)"
+_NAME_STOP = (
+    r"(?=\s*(?:[:/(),?]|call\b|have\b|has\b|had\b|asked\b|order\b"
+    r"|exists?\b|in (?:the )?crm\b|$))"
+)
+# Common non-company words a loose pattern might capture; rejected so we never
+# search the CRM for "What" or "Most recently".
+_NON_COMPANY_WORDS = {
+    "what", "who", "whom", "when", "where", "why", "how", "which", "that",
+    "this", "these", "those", "it", "they", "them", "we", "us", "you", "i",
+    "the", "a", "an", "there", "here", "today", "tomorrow", "yesterday", "now",
+    "please", "thanks", "most recently", "recently", "last", "latest", "their",
+    "our", "his", "her", "its", "any", "some", "all", "each", "everyone",
+}
+# Leading role/filler words that are never part of the company name itself, so a
+# generic "for <X>" capture like "the sales rep visiting Acme" can be trimmed.
+_LEADING_FILLER_RE = re.compile(
+    r"^(?:that last|the last|the|a|an|our|new|customer|account|client|"
+    r"sales\s+rep(?:resentative)?|rep|account\s+manager|sales\s+team|team|"
+    r"company|firm|visiting|meeting(?:\s+with)?|seeing|visit\s+to|with)\s+",
+    re.I,
+)
+# Dotted legal suffix (S.p.A. / S.r.l. / S.n.c. / S.a.s.). The leading "s." with a
+# literal dot avoids matching the plain English word "spa", so a real company name
+# ends at this suffix and any trailing noise ("... S.r.l. tomorrow") is dropped.
+_DOTTED_SUFFIX_RE = re.compile(
+    r"\bs\.\s*p\.?\s*a\.?|\bs\.\s*r\.?\s*l\.?|\bs\.\s*n\.?\s*c\.?|\bs\.\s*a\.?\s*s\.?",
+    re.I,
+)
+
+# Patterns are tried in priority order; the dedicated "visiting/meeting/seeing"
+# verb pattern is placed before the generic prepositions so that "for the sales
+# rep visiting <X>" resolves to <X> rather than "the sales rep visiting <X>".
+_CUSTOMER_PHRASE_PATTERNS = [
+    rf"customer\s+(?:named|called)\s+{_NAME}"
+    r"(?=\s*(?:[:/(),?]|exists?\b|in (?:the )?crm\b|$))",
+    rf"\b(?:visiting|meeting|seeing|calling\s+on|visit\s+to)\s+(?:with\s+)?{_NAME}{_NAME_STOP}",
+    # Possessive: "Primato Supermercati's deals", "NordSpesa's order".
+    rf"\b{_NAME_CS}(?=['\u2019]s\b)",
+    # Subject + action verb: "did NordSpesa complain", "has GranMercato ordered".
+    rf"\b(?:did|does|do|has|have|is|was|will|when|why)\s+{_NAME_CS}\s+"
+    r"(?:complain|complaint|report|reported|ask|asked|want|wanted|order|ordered"
+    r"|say|said|mention|mentioned|call|called|raise|raised|need|needs|place|placed"
+    r"|buy|bought|request|requested|sign|signed|have|has|receive|received)",
+    rf"(?:customer|account|client|with|for|from|about|of|regarding|concerning)\s+{_NAME}{_NAME_STOP}",
+    r"does\s+([A-Z][\w&'. -]{2,80}?)\s+have",
+    r"^([A-Z][\w&'. -]{2,80}?)\s*(?:\([^)]*\))?\s+asked",
+]
 
 
 def extract_customer_phrase(question: str) -> str | None:
     without_ids = re.sub(ID_PATTERNS["customer_ids"], "", question, flags=re.I)
-    patterns = [
-        r"customer\s+(?:named|called)\s+([A-Z][\w&'. -]{2,80}?)(?=\s*(?:\?|,|$)|\s+(?:exist|exists|in (?:the )?crm)\b)",
-        r"(?:customer|visiting|with|for|from)\s+([A-Z][\w&'. -]{2,80}?)(?=\s*(?:\(|,|\?|call\b|have\b|has\b|asked\b|order\b|$))",
-        r"does\s+([A-Z][\w&'. -]{2,80}?)\s+have",
-        r"^([A-Z][\w&'. -]{2,80}?)\s*(?:\([^)]*\))?\s+asked",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, without_ids, flags=re.I)
-        if match:
-            candidate = match.group(1).strip(" ,.'")
-            candidate = re.sub(
-                r"^(?:that last|the last|the customer|customer)\s+",
-                "",
-                candidate,
-                flags=re.I,
-            )
-            if len(normalize_text(candidate)) >= 3:
-                return candidate
+    without_ids = re.sub(r"\(\s*\)", " ", without_ids)  # drop "()" left by id removal
+    for pattern in _CUSTOMER_PHRASE_PATTERNS:
+        # finditer (not search) so a rejected leading match — e.g. "What's" for
+        # the possessive pattern — does not stop us from finding the real name
+        # later in the sentence ("...Primato Supermercati's deals").
+        for match in re.finditer(pattern, without_ids, flags=re.I):
+            candidate = match.group(1).strip(" ,.'\u2019")
+            # Strip leading filler repeatedly: "the sales rep visiting" -> "".
+            previous = None
+            while previous != candidate:
+                previous = candidate
+                candidate = _LEADING_FILLER_RE.sub("", candidate, count=1).strip(" ,.'\u2019")
+            # A dotted legal suffix marks the end of the name; drop trailing noise.
+            suffix = list(_DOTTED_SUFFIX_RE.finditer(candidate))
+            if suffix:
+                candidate = candidate[: suffix[0].end()].strip(" ,.'\u2019")
+            norm = normalize_text(candidate)
+            if len(norm) < 3 or norm in _NON_COMPANY_WORDS:
+                continue
+            return candidate
     return None
 
 

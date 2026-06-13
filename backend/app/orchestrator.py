@@ -41,7 +41,7 @@ from .normalizers import (
     extract_hard_tokens,
     normalize_text,
 )
-from .router import FastRoute, classify_fast, needs_llm_classification
+from .router import FastRoute, classify_fast, needs_llm_classification, route_from_hint
 from .schemas import AskResponse
 
 logger = logging.getLogger(__name__)
@@ -81,13 +81,13 @@ class Orchestrator:
         classification = self.llm.classify(question)
         if not classification:
             return route
+        refined = route_from_hint(question, classification, route.entities)
+        if refined is not None:
+            return refined
         hint = classification.get("verticale_hint")
         if hint in {"crm", "erp", "calls", "kb"}:
             route.verticale = hint
         route.classification = classification
-        if hint == "kb":
-            route.handler = "kb_generic"
-            route.confidence = 0.7
         return route
 
     def _maybe_compose(

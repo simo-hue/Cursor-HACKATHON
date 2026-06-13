@@ -919,3 +919,85 @@ full walkthrough.
       `background-image-containment`, `line-gradient-stop-colors`, `bounds-expansion`, `line-dash-offset`);
       `node --check` passes on the inline script; rendered the gem sprite sheet to PNG (via Quick Look) to
       confirm the gems + the red stock-risk ember look correct.
+
+- **[2026-06-13 16:52]: Fix customer-name extraction for artifact decks + harden resolution + chat artifact UX**
+  - *Details*: The query *"Generate a 4-slide HTML deck for the sales rep visiting Primato Supermercati
+    S.p.A.: profile, open deals, order/lot status, recent call complaints."* wrongly returned
+    *"I could not find any customer named 'the requested customer' in the CRM."*. Root cause was in
+    `extract_customer_phrase` (`backend/app/normalizers.py`): the colon in `S.p.A.:` is not part of the
+    name character class, so the lookahead could not terminate the capture, and the generic `for`
+    preposition matched before `visiting`, so the function returned `None`. With no requested name,
+    `missing_customer_answer` fell back to the literal placeholder `"the requested customer"`. The artifact
+    generation code itself was correct — it simply never ran because the customer lookup failed first.
+  - *Tech Notes*:
+    - `backend/app/normalizers.py` — rewrote `extract_customer_phrase`:
+      - Added a dedicated, higher-priority verb pattern `(?:visiting|meeting|seeing|calling on|visit to)`
+        so *"for the sales rep visiting <X>"* resolves to `<X>`, not `"the sales rep visiting <X>"`.
+      - New `_NAME_STOP` lookahead now terminates a name at `:` `/` `(` `)` `,` `?` (plus clause keywords),
+        fixing the colon/slash cases (`S.p.A.: profile`, `order/lot status`).
+      - Added repeated leading-filler stripping (`the/a/an/our/customer/account/sales rep/...`) and
+        `()` cleanup left behind by CUST-id removal (so `does <X> (CUST-0132) have` now extracts `<X>`).
+      - Added a dotted-legal-suffix truncation (`_DOTTED_SUFFIX_RE`) that drops trailing noise after
+        `S.p.A.`/`S.r.l.`/`S.n.c.`/`S.a.s.` (e.g. *"Acme Foods S.r.l. tomorrow"* → *"Acme Foods S.r.l"*),
+        while deliberately NOT matching the plain word "spa".
+    - `backend/app/handlers/__init__.py` — added `_search_terms()` and wired it into `resolve_customer`:
+      progressively broader mock-API searches (full phrase → legal-suffix-stripped core → first two words
+      → first word), so a name carrying a suffix or extra words still hits the CRM. Added `import re`.
+    - `backend/static/index.html` — the chat already detected inline HTML artifacts (`<!doctype html>` →
+      sandboxed `<iframe srcdoc>`); enhanced it so decks display well *from the chat* (the stated priority):
+      the iframe now auto-grows to its content height (no inner scrollbar), gained an **"Open full view"**
+      button (opens the deck in a new tab via a Blob URL), a dark frame background (no white flash), and a
+      `sandbox="allow-same-origin allow-popups"` attribute (no `allow-scripts` → safe).
+  - *Verification*: all 29 unit tests pass (`python -m unittest`); `node --check` passes on the inline
+    frontend script; live `POST /ask` on a real uvicorn server returns the inline HTML deck for the Primato
+    query (verticale `crm`, `artifact_url` null, real data — CUST-0132 / GDO / Verona / 4 deals /
+    740,000 EUR), the PDF query returns a working `artifact_url`, the CUST-id deck variant works, and a
+    trap (*"Nonexistent Pasta Holdings S.p.A"*) now honestly names the specific missing customer instead of
+    the generic placeholder. Rendered the generated deck in headless Chrome to confirm it looks correct.
+
+- **2026-06-13: Hidden-eval failure root cause (missing prod token) + routing robustness**
+  - *Details*: The platform hidden eval scored **-5** (0 correct, 2 partial, 13 no-answer, 1 wrong) with
+    **zero recorded mock-API calls** and "answers only from internal RAG". Diagnosis: the deployed Railway
+    service had **no `MOCK_API_TOKEN`** env var. The local token in `backend/.env` is valid (verified: 66
+    customers / 125 opportunities / 80 calls / 60 inventory rows) but `.env` is git-ignored, so it was never
+    deployed; on Railway `AlDenteAPI.get()` raised `APIConfigurationError` *before* any HTTP request, so
+    CRM/ERP/calls all returned the graceful "MOCK_API_TOKEN is not configured" message (counted as
+    `no_answer`) and only the KB (token-free) produced anything. Fixed the deployment and then hardened the
+    router for the "same shape, different wording" hidden questions (the secondary gap the feedback flagged:
+    *"why the agent is not identifying the correct source for structured queries"*).
+  - *Tech Notes*:
+    - **Deployment (live, verified)**: set all six vars on the `hackathon` Railway service via
+      `railway variables --set ... --skip-deploys` (secrets piped through stdin, never printed) and
+      redeployed. **Deploy must run from the repo root**, not `backend/`, because the service Root
+      Directory = `backend` (a `backend/`-context upload fails with `directory .../backend does not exist`).
+      Post-deploy live `POST /ask` returns correct grounded answers across all four verticali + the margin
+      trap, and `sources` now contain real endpoints (`crm/opportunities`, `erp/inventory`,
+      `calls/CALL-58020/transcript`).
+    - **`backend/.env`**: fixed a malformed `PUBLIC_BASE_URL` whose value contained the variable name
+      (`PUBLIC_BASE_URL=PUBLIC_BASE_URL=https://...`), which would have broken every binary artifact link.
+    - **`backend/app/router.py`**: the strict keyword router fell through to `generic` (which only recovers
+      KB) for natural paraphrases, so reworded CRM/ERP/calls questions abstained. Added (a) `pick_handler()`
+      — maps a `(verticale, question)` pair to a concrete handler with a sensible per-verticale default;
+      (b) `loose_route()` — a deterministic broad matcher (entity-id + keyword inference) that runs after the
+      strict rules miss, so most paraphrases route without any LLM call; (c) `route_from_hint()` — turns an
+      LLM classification (`verticale_hint` + `intent` + `artifact_type`) into a concrete handler route. A
+      shared `_has_cost_trap()` keeps reworded margin/cost questions on the honest trap handler.
+    - **`backend/app/orchestrator.py`**: `_apply_llm_route` now calls `route_from_hint` so an LLM-classified
+      crm/erp/calls question reaches a real handler (previously only `kb` was recovered; crm/erp/calls kept
+      the `generic` handler and abstained).
+    - **`backend/app/llm.py`**: rewrote `CLASSIFIER_PROMPT` with explicit per-verticale routing guidance
+      ("classify by the data needed, not the entity") and bounded `classify()` latency
+      (`with_options(timeout=llm_timeout_seconds, max_retries=0)`) so a slow/rate-limited model can't blow
+      the 30 s budget.
+    - **`backend/app/normalizers.py`**: (1) `extract_customer_phrase` now also handles possessive
+      (*"Primato Supermercati's deals"*) and subject-verb (*"did NordSpesa complain"*) phrasings, uses a
+      case-sensitive name matcher (`_NAME_CS` via scoped `(?-i:[A-Z])`) plus a `_NON_COMPANY_WORDS` stoplist,
+      and iterates with `finditer` so a rejected leading match (e.g. "What's") doesn't block the real name;
+      added `of/regarding/concerning` prepositions. (2) `is_artifact_request` now matches action verbs by
+      **whole word**, fixing a false trigger where *"...calls reported broken pasta"* built an HTML deck
+      because "reported" contained "report".
+  - *Verification (this iteration)*: 29/29 unit tests pass; full 12 `SAMPLE_QUESTIONS` pass end-to-end
+    against a local server (with the token) — 12/12; the paraphrase probe improved from ~5/13 answered to
+    ~12/13 (customer lookup, negotiation-by-channel, inventory, and the SKU→BOM→supplier chain all resolve);
+    offline unit checks confirm the new extraction/artifact behavior. **The router/extraction changes still
+    need a redeploy to go live** (see `TO_SIMO_DO.md`).

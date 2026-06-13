@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -73,6 +74,38 @@ def get_customer_index(ctx: Context) -> list[dict[str, Any]]:
     return rows
 
 
+_LEGAL_SUFFIX_RE = re.compile(
+    r"(?i)\b(?:s\.?\s*p\.?\s*a|s\.?\s*r\.?\s*l|s\.?\s*n\.?\s*c|s\.?\s*a\.?\s*s"
+    r"|spa|srl|snc|sas|s\.?\s*c\.?\s*a\.?\s*r\.?\s*l)\b\.?"
+)
+
+
+def _search_terms(requested: str) -> list[str]:
+    """Build progressively broader search terms for a company name.
+
+    Mock-API search is substring/prefix based, so a name carrying a legal suffix
+    ("Primato Supermercati S.p.A") or extra words may miss an exact match. We try
+    the full phrase first, then a suffix-stripped core, then the leading words.
+    """
+    terms = [requested]
+    core = re.sub(r"\s+", " ", _LEGAL_SUFFIX_RE.sub(" ", requested)).strip(" .,&-")
+    if core and core.lower() != requested.lower():
+        terms.append(core)
+    words = [word for word in re.split(r"\s+", core or requested) if len(word) > 1]
+    if len(words) >= 2:
+        terms.append(" ".join(words[:2]))
+    if words:
+        terms.append(words[0])
+    seen: set[str] = set()
+    unique: list[str] = []
+    for term in terms:
+        key = term.lower()
+        if term and key not in seen:
+            seen.add(key)
+            unique.append(term)
+    return unique
+
+
 def resolve_customer(question: str, ctx: Context) -> ResolvedEntity:
     ids = extract_ids(question)["customer_ids"]
     if ids:
@@ -89,12 +122,8 @@ def resolve_customer(question: str, ctx: Context) -> ResolvedEntity:
     requested = extract_customer_phrase(question)
     if not requested:
         return ResolvedEntity(False, requested=None, confidence=0.3)
-    search_terms = [requested]
-    stripped = requested.replace("S.p.A.", "").replace("S.r.l.", "").strip()
-    if stripped != requested:
-        search_terms.append(stripped)
     candidates: list[dict[str, Any]] = []
-    for term in search_terms:
+    for term in _search_terms(requested):
         candidates = ctx.api.search_customers(search=term)
         if candidates:
             break

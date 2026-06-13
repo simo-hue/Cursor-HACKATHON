@@ -9,11 +9,18 @@ from openai import OpenAI
 
 from .config import Settings, get_settings
 
-CLASSIFIER_PROMPT = """You classify questions for an Al Dente internal company brain.
-Return JSON only. Do not answer the user.
-Sources available: crm, erp, calls, kb.
-Extract IDs, customer names, SKUs, lots, calls, document IDs, requested artifact type,
-and likely intent. If uncertain, use null or empty arrays. Never invent entities."""
+CLASSIFIER_PROMPT = """You route questions for the Al Dente (pasta maker) company brain.
+Return JSON only. Do not answer the user. Pick exactly one source (verticale_hint):
+- crm: customers, accounts, opportunities/deals/pipeline, orders, invoices.
+- erp: stock/inventory levels, production lots, suppliers, bill of materials / raw
+  materials (semolina), shipments. Also cost/profit-margin questions (a trap).
+- calls: phone call logs, complaints, transcripts, defects discussed on calls.
+- kb: product spec sheets (shelf life, allergens), policies/procedures (returns,
+  quality, HACCP), the wholesale price list, customer requirements (capitolati).
+Choose by the data needed, not the entity: "what did customer X complain about on
+the last call" is calls; "is SKU X below minimum stock" is erp; "shelf life of X" is kb.
+Extract IDs, customer names, SKUs, lots, calls, document IDs, the requested artifact
+type, and a coarse intent. If uncertain use null or empty arrays. Never invent entities."""
 
 COMPOSE_PROMPT = (
     "You rewrite a verified internal answer for Al Dente S.r.l. into clear, natural prose. "
@@ -92,7 +99,10 @@ class LLMClient:
         if not self._client or not self.settings.model:
             return {}
         try:
-            response = self._client.chat.completions.create(
+            response = self._client.with_options(
+                timeout=self.settings.llm_timeout_seconds,
+                max_retries=0,
+            ).chat.completions.create(
                 model=self.settings.model,
                 temperature=0,
                 max_tokens=500,

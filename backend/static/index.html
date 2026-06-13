@@ -170,7 +170,7 @@
     .src-arrow{ opacity:.7; }
     .artifact{ display:inline-flex; align-items:center; gap:9px; margin-top:14px; padding:11px 16px; border-radius:12px; color:#20140a; background:linear-gradient(135deg,var(--gold-2),var(--gold)); text-decoration:none; font-weight:800; box-shadow:0 10px 26px rgba(232,184,91,.22); }
     .artifact:hover{ filter:brightness(1.05); }
-    .artifact-frame{ width:100%; min-height:440px; border:0; border-radius:14px; background:#fff; margin-top:6px; }
+    .artifact-frame{ width:100%; min-height:420px; border:1px solid var(--line-2); border-radius:14px; background:#130f0c; margin-top:6px; transition:height .2s ease; }
     .error{ color:#ffc0b3; padding:14px 16px; background:rgba(224,101,63,.1); border:1px solid rgba(224,101,63,.28); border-radius:13px; }
     .loader-dots{ display:flex; gap:6px; }
     .loader-dots i{ width:9px; height:9px; border-radius:50%; background:var(--gold); animation:bounce .9s infinite alternate; }
@@ -504,7 +504,7 @@
     const v = VERTICALE[data.verticale] || { label: data.verticale || "—", color: "#a89683" };
     const sources = data.sources || [];
     const content = isHtml
-      ? `<iframe class="artifact-frame" title="Generated HTML artifact"></iframe>`
+      ? `<iframe class="artifact-frame" title="Generated HTML artifact" sandbox="allow-same-origin allow-popups"></iframe><div class="meta-row"><button class="copy-btn" data-openhtml><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3h7v7M21 3l-9 9M10 5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/></svg>Open full view</button></div>`
       : `<div class="answer-content">${marked.parse(answerText)}</div>`;
     const artifact = data.artifact_url
       ? `<a class="artifact" href="${esc(data.artifact_url)}" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg>Download artifact</a>`
@@ -518,7 +518,30 @@
   }
 
   function wireAnswer(scope, info, onSource) {
-    if (info.isHtml) { const f = scope.querySelector("iframe"); if (f) f.srcdoc = info.answerText; }
+    if (info.isHtml) {
+      const f = scope.querySelector("iframe");
+      if (f) {
+        f.srcdoc = info.answerText;
+        // Grow the frame to fit the rendered artifact so the whole deck is
+        // visible inline instead of trapped behind an inner scrollbar.
+        const fit = () => {
+          try {
+            const doc = f.contentDocument || (f.contentWindow && f.contentWindow.document);
+            if (!doc || !doc.body) return;
+            const h = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight);
+            if (h) f.style.height = (h + 8) + "px";
+          } catch (_) {}
+        };
+        f.addEventListener("load", () => { fit(); setTimeout(fit, 350); });
+      }
+      const openHtml = scope.querySelector("[data-openhtml]");
+      if (openHtml) openHtml.addEventListener("click", () => {
+        const blob = new Blob([info.answerText], { type: "text/html" });
+        const url = URL.createObjectURL(blob);
+        window.open(url, "_blank", "noopener");
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      });
+    }
     const copy = scope.querySelector("[data-copy]");
     if (copy) copy.addEventListener("click", () => {
       navigator.clipboard?.writeText(info.answerText).then(() => {
