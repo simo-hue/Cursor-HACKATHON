@@ -381,7 +381,10 @@
     kb_doc:       { label: "Documents",      color: "#b094cf", shape: "round-rectangle" },
   };
   const LEGEND_ORDER = ["hub", "customer", "opportunity", "order", "lot", "product", "raw_material", "supplier", "call", "kb_doc"];
-  const ALWAYS_LABEL = new Set(["hub", "customer", "supplier", "product", "raw_material", "opportunity"]);
+  // Label tiers keep the default view readable: only anchors are labelled when
+  // zoomed out; secondary labels fade in as you zoom into a region.
+  const ALWAYS_LABEL = new Set(["hub", "customer", "supplier"]);
+  const SECONDARY_LABEL = new Set(["product", "raw_material", "opportunity"]);
   const VERTICALE = {
     crm:   { label: "CRM",   color: "#e0653f" },
     erp:   { label: "ERP",   color: "#8fb27a" },
@@ -540,8 +543,9 @@
   let activeFilter = null;
   let hubEles = null;
   let emberEles = null;
+  let secondaryEles = null;
   let ignited = false;
-  let lodOn = false;
+  let labelTier = -1;
   const cyEl = $("cy");
   const tooltip = $("tooltip");
   const inspector = $("inspector");
@@ -551,8 +555,16 @@
 
   function layoutOptions() {
     return fcoseReady
-      ? { name: "fcose", quality: "proof", animate: true, animationDuration: 650, randomize: true, fit: true, padding: 60, packComponents: true, nodeSeparation: 95, idealEdgeLength: 92, nodeRepulsion: 9000, gravity: 0.2, gravityRange: 3.6, numIter: 2500 }
-      : { name: "cose", animate: true, randomize: true, fit: true, padding: 60, idealEdgeLength: 92, nodeRepulsion: 9000, gravity: 0.3, numIter: 1200 };
+      ? {
+          name: "fcose", quality: "proof", animate: true, animationDuration: 700, randomize: true,
+          fit: true, padding: 70, packComponents: true,
+          nodeDimensionsIncludeLabels: true,   // reserve space for labels -> far less text overlap
+          uniformNodeDimensions: false,
+          nodeSeparation: 150, idealEdgeLength: 130, nodeRepulsion: 18000,
+          gravity: 0.22, gravityRange: 3.8, gravityCompound: 1.4, gravityRangeCompound: 1.6,
+          numIter: 3200,
+        }
+      : { name: "cose", animate: true, randomize: true, fit: true, padding: 70, nodeDimensionsIncludeLabels: true, idealEdgeLength: 130, nodeRepulsion: 18000, gravity: 0.28, numIter: 1600 };
   }
   function runLayout() { if (cy) cy.layout(layoutOptions()).run(); }
 
@@ -592,6 +604,7 @@
         "overlay-color": "#ffd98c", "overlay-opacity": 0, "overlay-padding": 8, "overlay-shape": "ellipse",
         "transition-property": "opacity, overlay-opacity, overlay-padding", "transition-duration": "150ms",
     }},
+    { selector: "node.lbl2", style: { "text-opacity": 0.85 } },
     { selector: "node.lod", style: { "text-opacity": 0 } },
     { selector: "edge", style: {
         "width": 1.3, "curve-style": "bezier",
@@ -651,7 +664,7 @@
     pulseRAF = requestAnimationFrame(pulseTick);
     if (ts - pulseLast < 45) return;          // ~22fps is plenty for a glow
     pulseLast = ts;
-    if (!cy || !graphVisible() || cy.zoom() < 0.3) return;
+    if (!cy || !graphVisible() || cy.zoom() < 0.18) return;
     const t = ts / 1000;
     const s = (Math.sin(t * 1.05) + 1) / 2;   // slow, for hubs
     const e = (Math.sin(t * 4.2) + 1) / 2;    // fast, hot, for embers
@@ -706,6 +719,20 @@
   }
 
   function onGraphVisible() { startAtmo(); if (cy) igniteGraph(); }
+
+  // Zoom-aware label density: 0 = far (no labels) · 1 = mid (anchors only) · 2 = near (+secondary)
+  function updateLabelTier() {
+    if (!cy) return;
+    const z = cy.zoom();
+    const tier = z < 0.16 ? 0 : z < 0.55 ? 1 : 2;
+    if (tier === labelTier) return;
+    labelTier = tier;
+    cy.batch(() => {
+      cy.nodes().removeClass("lod lbl2");
+      if (tier === 0) cy.nodes().addClass("lod");
+      else if (tier === 2 && secondaryEles) secondaryEles.addClass("lbl2");
+    });
+  }
 
   // ---------------------------------------------------------------------------
   // Living atmosphere: a slow warm nebula + drifting spore motes behind the graph
@@ -947,14 +974,15 @@
 
       hubEles = cy.nodes('[type = "hub"]');
       emberEles = cy.nodes().filter((n) => isEmber(n.data()));
+      secondaryEles = cy.nodes().filter((n) => SECONDARY_LABEL.has(n.data("type")));
 
       cy.on("mouseover", "node", (e) => { e.target.addClass("hovered"); if (!pinned && !activeFilter && spotState !== "result") highlight(e.target); showTip(e); cyEl.style.cursor = "pointer"; });
       cy.on("mousemove", "node", (e) => moveTip(e));
       cy.on("mouseout", "node", (e) => { e.target.removeClass("hovered"); hideTip(); cyEl.style.cursor = "default"; if (!pinned && !activeFilter && spotState !== "result") clearHighlight(); });
       cy.on("tap", "node", (e) => { highlight(e.target); openInspector(e.target.data()); });
       cy.on("tap", (e) => { if (e.target === cy) { pinned = null; clearHighlight(); closeInspector(); } });
-      cy.on("zoom", () => { const want = cy.zoom() < 0.24; if (want !== lodOn) { lodOn = want; cy.batch(() => (want ? cy.nodes().addClass("lod") : cy.nodes().removeClass("lod"))); } });
-      cy.ready(() => setTimeout(() => cy.fit(cy.elements(), 55), 700));
+      cy.on("zoom", updateLabelTier);
+      cy.ready(() => setTimeout(() => { cy.fit(cy.elements(), 60); updateLabelTier(); }, 700));
       if (graphVisible()) onGraphVisible();
     } catch (error) {
       console.error("Knowledge graph initialization failed", error);

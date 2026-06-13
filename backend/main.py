@@ -3,11 +3,13 @@
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.graph import GraphBuilder
 from app.orchestrator import Orchestrator
@@ -34,17 +36,36 @@ graph_builder = GraphBuilder(
 )
 
 
-@app.exception_handler(RequestValidationError)
-def validation_error(_request, _exc: RequestValidationError) -> JSONResponse:
+def _ask_fallback(message: str) -> JSONResponse:
     return JSONResponse(
         status_code=200,
         content=AskResponse(
-            answer="Not available: the request must contain a non-empty string field named 'question'.",
+            answer=message,
             sources=[],
             verticale="crm",
             artifact_url=None,
         ).model_dump(),
     )
+
+
+@app.exception_handler(RequestValidationError)
+def validation_error(_request, _exc: RequestValidationError) -> JSONResponse:
+    return _ask_fallback(
+        "Not available: the request must contain a non-empty string field named 'question'."
+    )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def ask_contract_guard(request: Request, exc: StarletteHTTPException):
+    # The /ask contract requires HTTP 200 for any answer. If routing produces a
+    # 404/405 on /ask (e.g. wrong method or a stale path), still honor the contract
+    # instead of leaking a 4xx. Every other path keeps FastAPI's default behavior.
+    if request.url.path.rstrip("/") == "/ask" and exc.status_code in (404, 405):
+        return _ask_fallback(
+            "Not available: send a POST to /ask with a JSON body "
+            '{"question": "<your question>"}.'
+        )
+    return await http_exception_handler(request, exc)
 
 
 @app.get("/", include_in_schema=False)

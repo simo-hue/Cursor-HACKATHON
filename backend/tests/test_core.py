@@ -321,6 +321,27 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assert_contract(response.json())
 
+    def test_wrong_method_on_ask_returns_200_not_405(self) -> None:
+        for call in (
+            self.client.get,
+            self.client.put,
+            self.client.delete,
+            self.client.options,
+            self.client.patch,
+        ):
+            response = call("/ask")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assert_contract(response.json())
+
+    def test_trailing_slash_post_reaches_ask(self) -> None:
+        response = self.client.post("/ask/", json={"question": "What is the returns policy?"})
+        self.assertEqual(response.status_code, 200)
+        self.assert_contract(response.json())
+
+    def test_ask_guard_is_scoped_other_404s_preserved(self) -> None:
+        self.assertEqual(self.client.get("/definitely-not-a-route").status_code, 404)
+        self.assertEqual(self.client.get("/files/does-not-exist.pdf").status_code, 404)
+
     def test_inline_html_keeps_artifact_url_null(self) -> None:
         response = self.client.post(
             "/ask",

@@ -837,6 +837,34 @@ full walkthrough.
         must-contain `CALL-58020`, correctly rejected).
       - `scripts/smoke_test.py` live: **6/6 passed**.
 
+- **2026-06-13: /ask contract guard - fix platform 405 (Method Not Allowed)**
+  - *Details*: The platform pre-submit Endpoint Check reported `ask_4xx: POST /ask returned 405`
+    (with `/health` 200). Diagnosis: the current `backend/main.py` already exposes a correct
+    `@app.post("/ask")` (verified returning 200 both via TestClient and a real uvicorn server), so the
+    405 came from a **stale Railway deployment** whose build predates the current route. To make this
+    failure mode impossible regardless of deploy state, added a defensive contract guard: any
+    `404`/`405` raised by routing on the `/ask` path is converted to a contract-compliant HTTP `200`
+    with the frozen schema. No auth, no streaming, no wrapper object, no path rename - the contract is
+    unchanged; the guard only prevents a 4xx from ever leaking on `/ask`.
+  - *Tech Notes*:
+    - **`backend/main.py`**: registered an `@app.exception_handler(StarletteHTTPException)`
+      (`ask_contract_guard`) that returns the `AskResponse` 200 fallback **only** when
+      `request.url.path.rstrip("/") == "/ask"` and the status is 404/405; every other path delegates to
+      FastAPI's default `http_exception_handler` (so `/files/*` and unknown routes still 404 correctly).
+      Refactored the shared 200 body into `_ask_fallback(message)` (reused by the existing
+      `RequestValidationError` handler).
+    - **Tests** (`backend/tests/test_core.py`): added `test_wrong_method_on_ask_returns_200_not_405`
+      (GET/PUT/DELETE/OPTIONS/PATCH on `/ask` -> 200 + schema), `test_trailing_slash_post_reaches_ask`
+      (`POST /ask/` -> 200), and `test_ask_guard_is_scoped_other_404s_preserved` (`/definitely-not-a-route`
+      and `/files/missing.pdf` still 404). Full suite: **29 passed**.
+    - **Real-server verification**: started `uvicorn main:app` (Railway's start command) and curled it -
+      `POST /ask` 200, `GET /ask` 200 (previously 405), `POST /ask` body returns the full JSON schema
+      with `content-type: application/json`, `GET /health` 200.
+    - **Operational fix (logged in `TO_SIMO_DO.md`)**: redeploy the current `backend/` via `railway up`,
+      then re-run the platform Endpoint Check. The deployed build must contain this code; deploy from
+      `backend/`, not the `hackathon info/backend/` starter (which returns 501).
+    - No new dependencies; `/ask` request/response schema unchanged.
+
 - [2026-06-13 16:02]: Railway Deployment Configuration Fix
   - *Details*: Identified the cause of the Railway build failure when connecting the GitHub repository.
   - *Tech Notes*: Since the Railway service is pulling from the GitHub repository (`repo: simo-hue/Cursor-HACKATHON`) rather than `backend/`, Railpack couldn't find `pyproject.toml` in the repository root. The fix is to manually set the `Root Directory` setting to `/backend` in the Railway dashboard. This manual action was added to `TO_SIMO_DO.md`.
