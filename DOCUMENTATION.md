@@ -684,3 +684,7 @@ full walkthrough.
     cleaner inside `GraphBuilder.build()`. KB-only graph now reports 4 hubs with correct labels;
     `PAS-SPA-500` is correctly labelled "Spaghetti n.5 - 500g box". No API/contract impact
     (graph endpoint only).
+
+- **2026-06-13: Removed suggested questions from UI**
+  - *Details*: Removed the sample questions chips under the "Find the answer" button in the Ask the Brain section.
+  - *Tech Notes*: Modified `backend/static/index.html` to hide the `<div class="chips" id="chips">` element using `style="display: none;"` and removed its `<button>` children. No JS logic changes required, `querySelectorAll` returns empty list and executes flawlessly.
