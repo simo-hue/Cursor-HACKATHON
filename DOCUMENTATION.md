@@ -899,6 +899,20 @@ full walkthrough.
       and the `setView('graph')` router.
     - **Accessibility/perf**: full `prefers-reduced-motion` support (`REDUCED` flag freezes atmosphere,
       disables breathing/flow/ignite, falls back to a static reveal); DPR-capped atmosphere canvas.
+    - **Update [2026-06-13 16:24] — Layout de-clutter (no more overlap)**: tuned the fcose layout to stop
+      nodes/labels from overlapping in the unfiltered 230-node view. Key change is
+      `nodeDimensionsIncludeLabels: true` (the layout now reserves space for each node's label box), plus
+      moderate spacing (`nodeRepulsion 13000`, `idealEdgeLength 120`, `nodeSeparation 120`, `numIter 3200`,
+      `packComponents`, compound gravity) and narrower labels (`text-max-width` 116→96). Introduced
+      **zoom-aware label tiers** to kill text spam: `ALWAYS_LABEL` is now just `{hub, customer, supplier}`,
+      a new `SECONDARY_LABEL = {product, raw_material, opportunity}` set fades in via a `.lbl2` class only
+      when zoomed in. `updateLabelTier()` (bound to the `zoom` event, replacing the old single LOD toggle)
+      switches tiers: `z<0.12` none · `z<0.5` anchors only · else +secondary. Also added a `?still=1`
+      static render mode (`STILL` flag folds into `REDUCED`) that renders the settled graph with no looping
+      animation — useful for thumbnails/embeds and for deterministic headless snapshots.
+    - **Verification (layout)**: rendered the live 230-node graph in headless Chrome at the default fit —
+      nodes are now evenly distributed with clear separation and only anchor labels shown (vs the previous
+      overlapping mess where every product name was forced on). `node --check` passes; no lint errors.
     - **Verification**: server boots and `GET /` returns 200 with all new code present; `GET /graph-data`
       returns valid JSON (57 KB-only nodes here because the mock API is 403 in the offline sandbox);
       confirmed Cytoscape 3.28.1 supports every style prop used (`underlay-shape`, `overlay-shape`,

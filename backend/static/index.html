@@ -405,7 +405,10 @@
   const esc = (v) => { const d = document.createElement("div"); d.textContent = v == null ? "" : String(v); return d.innerHTML; };
   const colorOf = (t) => (TYPES[t] || {}).color || "#e8b85b";
 
-  const REDUCED = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  // Static render mode (?still=1) renders the settled graph with no looping
+  // animation — useful for thumbnails/embeds and deterministic snapshots.
+  const STILL = /[?&]still\b/.test(location.search);
+  const REDUCED = STILL || !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
   // ---------------------------------------------------------------------------
   // Color utils + per-type "glowing gem" SVG sprites (baked once, cached)
@@ -560,11 +563,11 @@
           fit: true, padding: 70, packComponents: true,
           nodeDimensionsIncludeLabels: true,   // reserve space for labels -> far less text overlap
           uniformNodeDimensions: false,
-          nodeSeparation: 150, idealEdgeLength: 130, nodeRepulsion: 18000,
-          gravity: 0.22, gravityRange: 3.8, gravityCompound: 1.4, gravityRangeCompound: 1.6,
+          nodeSeparation: 120, idealEdgeLength: 120, nodeRepulsion: 13000,
+          gravity: 0.25, gravityRange: 3.8, gravityCompound: 1.4, gravityRangeCompound: 1.6,
           numIter: 3200,
         }
-      : { name: "cose", animate: true, randomize: true, fit: true, padding: 70, nodeDimensionsIncludeLabels: true, idealEdgeLength: 130, nodeRepulsion: 18000, gravity: 0.28, numIter: 1600 };
+      : { name: "cose", animate: true, randomize: true, fit: true, padding: 70, nodeDimensionsIncludeLabels: true, idealEdgeLength: 120, nodeRepulsion: 13000, gravity: 0.28, numIter: 1600 };
   }
   function runLayout() { if (cy) cy.layout(layoutOptions()).run(); }
 
@@ -592,7 +595,7 @@
         "font-size": (e) => (e.data("type") === "hub" ? 13 : 10),
         "font-weight": (e) => (e.data("type") === "hub" ? 700 : 600),
         "text-valign": "bottom", "text-halign": "center", "text-margin-y": 9,
-        "text-wrap": "wrap", "text-max-width": 116,
+        "text-wrap": "wrap", "text-max-width": 96,
         "text-outline-color": "#140f0b", "text-outline-width": 2.6,
         "text-opacity": (e) => (ALWAYS_LABEL.has(e.data("type")) ? 0.92 : 0),
         // underlay = animated halo channel (breathing hubs / stock-risk embers / ignite flash)
@@ -724,7 +727,7 @@
   function updateLabelTier() {
     if (!cy) return;
     const z = cy.zoom();
-    const tier = z < 0.16 ? 0 : z < 0.55 ? 1 : 2;
+    const tier = z < 0.12 ? 0 : z < 0.5 ? 1 : 2;
     if (tier === labelTier) return;
     labelTier = tier;
     cy.batch(() => {
