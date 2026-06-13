@@ -1,0 +1,15 @@
+---
+description: Company Brain challenge - project spec and hard constraints
+alwaysApply: true
+---
+
+Before any task in this repo, read `AGENTS.md` fully - it is the project spec.
+
+Non-negotiable constraints (full detail in AGENTS.md):
+
+- `POST /ask` schema is FROZEN: `{"question"}` -> `{"answer", "sources", "verticale", "artifact_url"?}`. No auth, no streaming, no job pattern, HTTP 200 even for "not available" answers.
+- Every `/ask` response must complete within 60 seconds.
+- The only data sources are the Al Dente mock APIs and the documents in `backend/data/kb/`. Never invent data; when the data does not exist, say so honestly.
+- Mock API calls need `Authorization: Bearer $MOCK_API_TOKEN` and are counted server-side: efficiency (calls, bytes) affects the score. Prefer filtered/paginated calls over bulk downloads.
+- Never commit `.env` or hardcode keys.
+- Code, comments, identifiers: English.

@@ -1,0 +1,23 @@
+# FALLBACK dev environment - use this only if you don't want to install
+# Python + uv natively (native is the default path, see README.md).
+#
+# Run:  docker compose -f docker-compose.dev.yml up -d
+# Then: http://localhost:8000  (UI + /ask + /docs)
+#
+# Source code is bind-mounted: edits on your machine hot-reload in the container.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+    env_file:
+      - path: ./backend/.env
+        required: false   # create it from backend/.env.example when ready
+    environment:
+      - PYTHONUNBUFFERED=1

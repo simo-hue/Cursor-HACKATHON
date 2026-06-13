@@ -1,0 +1,16 @@
+# Never upload/commit secrets
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Generated artifacts
+static/files/*
+!static/files/.gitkeep
