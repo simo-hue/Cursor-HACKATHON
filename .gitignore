@@ -16,6 +16,9 @@ __pycache__/
 backend/static/files/*
 !backend/static/files/.gitkeep
 
+# Event reference exports can contain participant credentials.
+ADDITIONAL INFO ( to check everything is coherent )/
+
 # Editors / OS
 .DS_Store
 .idea/

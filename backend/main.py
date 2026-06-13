@@ -1,52 +1,54 @@
-"""Al Dente Company Brain - backend entry point.
+"""Al Dente Company Brain backend entry point."""
 
-Your job: implement the agent behind POST /ask. It orchestrates the Al Dente
-mock APIs (CRM / ERP / call logs) and a knowledge base you build over data/kb/,
-then answers with text or an artifact. Full spec and rules in AGENTS.md.
-
-The /ask contract below is FROZEN - the automated evaluator depends on it.
-"""
-
-import os
+import logging
 from pathlib import Path
 
-from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
 
-load_dotenv()
+from app.graph import GraphBuilder
+from app.orchestrator import Orchestrator
+from app.schemas import AskRequest, AskResponse
 
-app = FastAPI(title="Al Dente Company Brain")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 _STATIC = Path(__file__).resolve().parent / "static"
 _FILES = _STATIC / "files"
 _FILES.mkdir(parents=True, exist_ok=True)
 
-# Binary artifacts (docx / pptx / pdf / xlsx) you generate at request time go in
-# static/files/ and are served from /files/<name> by this same backend.
-# artifact_url must be ABSOLUTE: f"{os.environ['PUBLIC_BASE_URL']}/files/<name>"
+app = FastAPI(title="Al Dente Company Brain", version="1.0.0")
 app.mount("/files", StaticFiles(directory=_FILES), name="files")
+orchestrator = Orchestrator()
+graph_builder = GraphBuilder(
+    orchestrator.api,
+    orchestrator.kb,
+    orchestrator.graph_cache,
+)
+
+
+@app.exception_handler(RequestValidationError)
+def validation_error(_request, _exc: RequestValidationError) -> JSONResponse:
+    return JSONResponse(
+        status_code=200,
+        content=AskResponse(
+            answer="Not available: the request must contain a non-empty string field named 'question'.",
+            sources=[],
+            verticale="crm",
+            artifact_url=None,
+        ).model_dump(),
+    )
 
 
 @app.get("/", include_in_schema=False)
 def ui() -> FileResponse:
-    """Placeholder page. Building a minimal UI is part of the challenge:
-    it must exist and work, but it is not graded - replace static/index.html
-    (or serve your own frontend)."""
     return FileResponse(_STATIC / "index.html")
-
-
-class AskRequest(BaseModel):
-    question: str = Field(..., min_length=1)
-
-
-class AskResponse(BaseModel):
-    answer: str
-    sources: list[str]
-    verticale: str  # one of: "crm", "erp", "calls", "kb"
-    artifact_url: str | None = None  # only for docx/pptx/pdf/xlsx questions
 
 
 @app.get("/health")
@@ -56,11 +58,29 @@ def health() -> dict[str, str]:
 
 @app.post("/ask", response_model=AskResponse)
 def ask(request: AskRequest) -> AskResponse:
-    raise HTTPException(
-        status_code=501,
-        detail=(
-            "Not implemented. Build the agent loop: route the question, call "
-            "the Al Dente APIs and your knowledge base, compose the answer. "
-            "See AGENTS.md for the full spec."
-        ),
-    )
+    try:
+        return orchestrator.answer(request.question)
+    except Exception:
+        logger.exception("Unhandled /ask failure")
+        return AskResponse(
+            answer=(
+                "I could not answer reliably because an internal error occurred "
+                "while checking the available Al Dente sources."
+            ),
+            sources=[],
+            verticale="crm",
+            artifact_url=None,
+        )
+
+
+@app.get("/graph-data")
+def graph_data() -> dict:
+    try:
+        return graph_builder.build()
+    except Exception:
+        logger.exception("Graph construction failed")
+        return {
+            "nodes": [],
+            "edges": [],
+            "warnings": ["The knowledge graph could not be built from the available sources."],
+        }

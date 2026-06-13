@@ -78,6 +78,31 @@ question
 
 ---
 
+### 1.1 LLM budget and intent-classification policy
+
+The default path must use **zero LLM calls**. Do not make a classification call and a final-answer call for every request. The 30-second evaluator timeout and provider rate limits make two LLM calls per request too risky.
+
+Use this budget:
+
+| Request type | LLM calls | Rule |
+|---|---:|---|
+| Direct ID/entity lookup, stock check, aggregate, trap, or known sample-shape handler | `0` | Route with regex/rules and answer with deterministic template. |
+| Ambiguous request where deterministic routing cannot choose a handler | `1` | Use classification/extraction only; final answer should use deterministic template. |
+| Complex artifact prose/deck after all facts are collected | `0-1` | Use LLM only to polish/generate the artifact from evidence. |
+| LLM classification fails or times out | `0` after failure | Fall back to deterministic routing and specific abstention. |
+
+Implementation requirements:
+
+1. Create `classify_fast(question)` in `router.py` using regex, keywords, IDs, artifact terms, and aggregate terms.
+2. Create `needs_llm_classification(question, fast_route)` that returns `True` only when no deterministic handler can confidently run.
+3. Set a short LLM timeout for classification, e.g. `4-6s`.
+4. Set a per-request orchestrator deadline, e.g. `28s`, and skip optional LLM polishing if less than `6s` remains.
+5. Prefer deterministic answer templates for evaluator-facing facts.
+6. Never require the LLM for the sample-question shapes or obvious hidden variants.
+7. If a request used LLM classification, do not also call the LLM for final wording unless it is an artifact and enough time remains.
+
+---
+
 ## 2. Target repository structure
 
 Repo-specific note for Simone's current tree: the root contains a duplicate reference copy under `hackathon info/`. Do **not** edit or deploy anything inside `hackathon info/`; treat it as archived source material only. Implement the product in the top-level `backend/` folder and root-level project files. Keep generated plans/prompts at the repository root.
@@ -454,7 +479,7 @@ Authority rule:
 
 ### 9.1 `app/llm.py`
 
-The product uses Regolo with OpenAI-compatible API.
+The product uses Regolo with OpenAI-compatible API. The LLM wrapper is optional at runtime: deterministic handlers must still work when the LLM is unavailable.
 
 Implement small wrapper:
 
@@ -467,7 +492,7 @@ class LLMClient:
 
 Do not rely on tool/function calling for correctness.
 
-Use normal chat completions and request JSON when classifying.
+**Important latency rule:** do not call `classify()` for every request. The router must first run deterministic classification in `router.py`. Only call `LLMClient.classify()` when deterministic routing is ambiguous and no high-confidence handler can run.
 
 Classification prompt output schema:
 
@@ -488,6 +513,14 @@ Classification prompt output schema:
   "needs": ["short descriptions of needed data"]
 }
 ```
+
+LLM call budget:
+
+1. Direct deterministic handlers: `0` LLM calls.
+2. Ambiguous intent: at most `1` LLM call for classification.
+3. Complex artifacts: at most `1` LLM call for prose/artifact polish after facts are collected.
+4. Avoid classification + final-answer LLM on the same request. If classification was needed, final wording should be deterministic unless the answer is an artifact and time remains.
+5. Use short timeouts and catch all LLM errors.
 
 LLM guardrails:
 
@@ -528,10 +561,22 @@ def resolve_customer(question: str, api: AlDenteAPI) -> ResolvedEntity:
 Rules:
 
 1. If `CUST-####` is present, call `/crm/customers/{id}`.
-2. Else search `/crm/customers?search=<name>` if a likely company name exists.
-3. If no exact search result, use fuzzy match over a limited customer list.
-4. Verify uniqueness. If ambiguous, return `answerable=False` with candidates.
-5. If none found, return high-confidence abstention: “There is no customer named X in the CRM.”
+2. Else extract the likely company name and call `/crm/customers?search=<name>`.
+3. If exact API search returns one clear result, use it.
+4. If exact API search fails, use fuzzy matching over a cached customer index.
+5. Verify uniqueness. If ambiguous, return `answerable=False` with candidates.
+6. If none found, return high-confidence abstention: “There is no customer named X in the CRM.”
+
+Customer index policy:
+
+1. Do **not** fetch all customers at application startup. Keep `/health` fast and independent of external APIs.
+2. Build the customer index lazily only when fuzzy matching is actually needed, or when `/graph-data` needs representative customer nodes.
+3. Populate with paginated `/crm/customers?limit=200&offset=...` until complete. This is acceptable because the index is reused and only fetched on demand.
+4. Cache the index for 15 minutes with the shared TTL cache.
+5. Reuse the same cached index for entity resolution and graph construction.
+6. Normalize names before matching: lowercase, remove punctuation, collapse spaces, strip company suffixes (`S.p.A.`, `Spa`, `Srl`, `S.r.l.`), and handle joined/spaced variants such as `GranMercato` vs `Gran Mercato`.
+7. Use conservative thresholds with `rapidfuzz`: exact normalized match wins; fuzzy match should require a strong score and a clear gap from the second candidate.
+8. If fuzzy match is not clearly unique, abstain rather than guessing.
 
 ### 10.2 SKU/product resolver
 
@@ -1058,19 +1103,33 @@ Return Cytoscape-compatible data:
 }
 ```
 
+Graph initialization policy:
+
+1. Do **not** build graph data at application startup.
+2. Build graph data lazily on the first `GET /graph-data` request.
+3. Cache the completed graph for 15 minutes.
+4. The UI may call `/graph-data` on page load, but `/ask` must never wait for graph initialization.
+5. If mock API credentials are missing or an API call fails, return a graceful partial graph instead of a 500. At minimum, include local KB document/product nodes if available and a `warnings` field.
+
 Build a representative graph, not the entire database:
 
-1. Active customers, limited to ~20.
-2. Open opportunities, limited to useful examples.
-3. Recent calls, limited to ~20.
-4. Below-min inventory items.
-5. A handful of finished product SKUs.
-6. BOM links for selected SKUs.
-7. Raw materials.
-8. Suppliers.
-9. Optional KB docs as document nodes.
+1. Customer nodes: cached active customer index, limited to ~20 representative active customers.
+2. Opportunity nodes: open opportunities (`qualification` and `negotiation`), limited to ~30. Link to customer when `customer_id` is present.
+3. Call nodes: recent calls or complaint/follow-up calls, limited to ~20. Link to customer when `customer_id` is present. Do not fetch full transcripts for graph construction.
+4. Inventory nodes: below-min finished goods and raw materials, limited to ~30.
+5. Product/SKU nodes: include finished goods from inventory plus SKUs found in KB product specs.
+6. BOM links: fetch BOM only for a small selected SKU set, e.g. visible below-min finished goods plus 3-5 known/sample SKUs. Do not fetch BOM for every product.
+7. Raw material nodes: from BOM and below-min inventory.
+8. Supplier nodes: resolve suppliers for raw materials when IDs are available or by category/search when cheap.
+9. Optional KB document nodes: link product spec docs to their SKU and policy docs to a `KB Policy` hub node.
 
-Cache graph data for 15 minutes to avoid metered API waste.
+Graph endpoint performance rules:
+
+1. Target response under `3-5s` on cold graph build.
+2. Use API filters and small limits.
+3. Reuse cached customer index and API cache.
+4. Never call the LLM from `/graph-data`.
+5. Never perform graph work inside `/ask`.
 
 ### 15.5 Node click behavior
 
@@ -1167,9 +1226,10 @@ Deploy early even if not perfect, then iterate.
 2. Never bulk download transcripts unless absolutely necessary.
 3. Page all list endpoints for aggregates.
 4. Limit LLM calls:
-   - 0 for deterministic direct answers if possible.
-   - 1 for classification only when needed.
-   - 1 for final polished answer only when useful.
+   - 0 for deterministic direct answers, known sample-shape variants, aggregates, traps, and entity lookups.
+   - 1 for classification only when deterministic routing is ambiguous.
+   - 1 for final polished answer only for complex artifacts or unusually complex summaries.
+   - Avoid classification + final-answer LLM on the same request.
 5. Prefer deterministic templates for common answers.
 6. Cache repeated API calls and repeated questions.
 7. Keep startup light. Build KB index lazily, not during healthcheck.
