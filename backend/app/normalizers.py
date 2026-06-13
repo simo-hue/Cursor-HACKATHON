@@ -24,6 +24,10 @@ COMPANY_SUFFIX_RE = re.compile(
 
 ISO_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+# Product-name ordinals such as "n.24" / "no. 51" / "#205" are part of the human
+# label, not must-contain facts (the SKU is the real identifier), so they are not
+# treated as hard tokens. This keeps the LLM free to drop verbose product titles.
+ORDINAL_RE = re.compile(r"(?:\bNO?\.\s?\d+|#\s?\d+)")
 
 
 def normalize_text(value: str) -> str:
@@ -74,6 +78,7 @@ def extract_hard_tokens(text: str) -> set[str]:
     for match in ISO_DATE_RE.findall(working):
         tokens.add(f"DATE:{match}")
         working = working.replace(match, " ")
+    working = ORDINAL_RE.sub(" ", working)
     for match in NUMBER_RE.findall(working):
         canonical = _canonical_number(match)
         if canonical is not None:
@@ -86,6 +91,47 @@ def answer_preserves_tokens(candidate: str, required: set[str]) -> bool:
     if not required:
         return True
     return required <= extract_hard_tokens(candidate)
+
+
+def answer_within_tokens(candidate: str, allowed: set[str]) -> bool:
+    """True when the candidate introduces no hard token outside ``allowed``.
+
+    Guards against fabricated facts and prompt injection: a composed answer may
+    only contain IDs/dates/numbers that already exist in the grounded evidence.
+    """
+    return extract_hard_tokens(candidate) <= allowed
+
+
+def polarity_signature(text: str) -> frozenset[str]:
+    """Capture yes/no and below/late conclusions that hard tokens cannot.
+
+    Token validation is value-blind, so an answer could keep every number yet
+    invert the verdict ("below" -> "not below", "Yes" -> "No"). This signature
+    lets the caller reject such semantic inversions.
+    """
+    t = normalize_text(text)
+    sig: set[str] = set()
+    if not t:
+        return frozenset(sig)
+    if re.search(r"\bnot below\b", t):
+        sig.add("not_below")
+    elif "below" in t:
+        sig.add("below")
+    if re.search(r"\bnot late\b", t):
+        sig.add("not_late")
+    elif re.search(r"\blate\b", t):
+        sig.add("late")
+    first = t.split(" ", 1)[0]
+    if first == "yes":
+        sig.add("yes")
+    elif first == "no":
+        sig.add("no")
+    return frozenset(sig)
+
+
+def answer_keeps_polarity(candidate: str, deterministic: str) -> bool:
+    """True when the candidate preserves every polarity conclusion of the source."""
+    return polarity_signature(deterministic) <= polarity_signature(candidate)
 
 
 def is_aggregate_question(question: str) -> bool:

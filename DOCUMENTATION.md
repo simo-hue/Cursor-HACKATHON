@@ -797,3 +797,83 @@ full walkthrough.
       `36 months/gluten/soy/mustard` and `740` preserved) and **no** Regolo call on the artifact path;
       total run ~4.3s, each `/ask` well under the 30s ceiling. Model `mistral-small-4-119b` confirmed live.
     - No new dependencies; no `/ask` schema change.
+
+- **2026-06-13: Bulletproofing the LLM composer (adversarial hardening)**
+  - *Details*: Stress-tested the new composer against weird/adversarial inputs and closed three real
+    gaps that token-presence validation alone did not cover. (1) **Hallucination / prompt injection**:
+    the original check was one-directional (`required ⊆ composed`), so the LLM could *add* a fabricated
+    ID/number (or follow an injected instruction in the question) and still pass. (2) **Over-strict
+    false rejection**: product-name ordinals like `n.24` / `n.51` were treated as must-contain facts,
+    so a correct, complete CRM answer was being rejected for dropping marketing ordinals. (3)
+    **Semantic inversion**: the LLM could keep every number yet flip the verdict
+    ("below" → "not below", "Yes" → "No") undetected. Also capped the question length fed to the model.
+  - *Tech Notes*:
+    - **`backend/app/normalizers.py`**: added `answer_within_tokens(candidate, allowed)` (composed hard
+      tokens must be a subset of the grounded evidence — blocks fabricated facts & injection);
+      `ORDINAL_RE` + extraction step that strips `n.<num>`/`no. <num>`/`#<num>` product ordinals so they
+      are neither required nor counted; `polarity_signature(text)` + `answer_keeps_polarity(candidate,
+      deterministic)` capturing yes/no, below/not-below, late/not-late verdicts.
+    - **`backend/app/llm.py`**: added `grounding_text(anchor, facts)` (shared by the prompt and the
+      orchestrator's allowed-token set), `_curated_json`, and `QUESTION_CAP=2000`; both `classify` and
+      `compose` now truncate the question. `COMPOSE_PROMPT` strengthened to forbid changing
+      verdicts/negations.
+    - **`backend/app/orchestrator.py`**: `_maybe_compose` now accepts a composed answer only when it
+      **preserves** all required tokens, stays **within** the grounded token set, AND **keeps polarity** —
+      otherwise it falls back to deterministic.
+    - **Tests**: added `test_ignores_product_name_ordinals`, `test_within_tokens_blocks_extra_fact`,
+      `test_polarity_catches_inversion`, `test_polarity_catches_late_inversion`,
+      `test_rejects_hallucinated_token`, `test_rejects_prompt_injection_extra_number`,
+      `test_rejects_semantic_inversion`, `test_allows_grounded_fact_from_evidence`,
+      `test_skips_when_deadline_tight`, `test_decimal_thousands_and_percent`. Suite: **26 passed**.
+    - **Verification**:
+      - *Adversarial contract probe* (network OFF): 19 hostile `/ask` payloads (missing/null/int/bool/
+        list/dict question, empty/whitespace/1-char, 100k chars, unicode+null+control, SQL & prompt
+        injection, non-JSON body, array/string bodies, emoji, extra fields) + `/health`, `/`,
+        `/graph-data` → **22/22 returned HTTP 200 with the exact frozen schema**.
+      - *Full 12-sample live run* (Regolo + mock API): **12/12 passed** (facts + verticale); composer
+        **accepted on 7** (Q1/Q4/Q5/Q6/Q10/Q11/Q12), safely fell back on Q2/Q3, and correctly did
+        **no-compose** on the traps (Q7/Q8) and the artifact deck (Q9). Diagnosed both fallbacks as
+        legitimate (Q1 was the ordinal false-positive — now fixed and ACCEPTED; Q3 dropped the
+        must-contain `CALL-58020`, correctly rejected).
+      - `scripts/smoke_test.py` live: **6/6 passed**.
+
+- [2026-06-13 16:02]: Railway Deployment Configuration Fix
+  - *Details*: Identified the cause of the Railway build failure when connecting the GitHub repository.
+  - *Tech Notes*: Since the Railway service is pulling from the GitHub repository (`repo: simo-hue/Cursor-HACKATHON`) rather than `backend/`, Railpack couldn't find `pyproject.toml` in the repository root. The fix is to manually set the `Root Directory` setting to `/backend` in the Railway dashboard. This manual action was added to `TO_SIMO_DO.md`.
+
+- [2026-06-13 16:15]: Knowledge Graph "Stunning" Visual Overhaul (frontend only)
+  - *Details*: Reworked how every node/edge in the Cytoscape knowledge graph is rendered, turning flat
+    colored shapes into warm "bioluminescent gem" nodes with a living atmosphere — without touching any
+    interaction logic (inspector, spotlight, legend filter, highlight, controls, chat all unchanged) and
+    without any backend change (the data needed, e.g. `below_min`, is already served by `/graph-data`).
+    Design was agreed via a structured Q&A: stay in Cytoscape; glowing gems keeping the per-type
+    silhouettes (no glyphs); gradient edges with gold energy-flow on focus; restrained living atmosphere;
+    hubs breathe + nodes react on interaction; stock-risk `below_min` ember overlay; "ignite" entrance.
+  - *Tech Notes*:
+    - **File**: `backend/static/index.html` (single-file UI; no new dependencies, no new endpoints).
+    - **Gem sprites**: added color utils (`mix`/`lighten`/`darken`) and `nodeSprite(type, ember)` which
+      bakes a per-type SVG (radial gradient body + glossy specular + soft type-colored `feGaussianBlur`
+      glow + the existing silhouette via `shapeMarkup()`) into a cached `data:image/svg+xml` URI. Nodes now
+      use `background-image` + `background-image-containment:over` + `background-clip:none` +
+      `background-width/height:220%` + `bounds-expansion:44` so the glow overflows the node box without
+      clipping; `background-opacity:0`, `border-width:0`.
+    - **State channels**: `underlay-*` = animated halo (hub breathing / stock ember / ignite flash);
+      `overlay-*` (ellipse) = hover/selection emphasis. Selection/hover no longer use borders.
+    - **Edges**: `line-fill:linear-gradient` with `line-gradient-stop-colors` derived from source→target
+      type colors (calm at rest, `opacity .26`); `edge.hl` switches to a solid gold dashed line and a
+      `flowTick()` rAF animates `line-dash-offset` (energy flow) only while `.hl` edges exist.
+    - **Atmosphere**: new `<canvas id="atmo">` behind `#cy` (z-index 0 vs 1); `atmoTick()` (~30fps) draws a
+      slow warm nebula + drifting pre-rendered "spore" motes; pauses when the graph view isn't visible.
+    - **Motion**: `pulseTick()` (~22fps, batched) breathes hub nodes and pulses `below_min` embers, gated
+      off when `zoom < 0.3` / view hidden; hover adds `.hovered`, zoom-out adds `.lod` (hides minor labels).
+    - **Entrance**: `igniteGraph()` staggers a scale/opacity+glow reveal from graph centre outward, then
+      illuminates edges, then starts the pulse; runs once via `onGraphVisible()` wired into `loadGraph()`
+      and the `setView('graph')` router.
+    - **Accessibility/perf**: full `prefers-reduced-motion` support (`REDUCED` flag freezes atmosphere,
+      disables breathing/flow/ignite, falls back to a static reveal); DPR-capped atmosphere canvas.
+    - **Verification**: server boots and `GET /` returns 200 with all new code present; `GET /graph-data`
+      returns valid JSON (57 KB-only nodes here because the mock API is 403 in the offline sandbox);
+      confirmed Cytoscape 3.28.1 supports every style prop used (`underlay-shape`, `overlay-shape`,
+      `background-image-containment`, `line-gradient-stop-colors`, `bounds-expansion`, `line-dash-offset`);
+      `node --check` passes on the inline script; rendered the gem sprite sheet to PNG (via Quick Look) to
+      confirm the gems + the red stock-risk ember look correct.

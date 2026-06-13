@@ -33,8 +33,14 @@ from .handlers.erp import (
 from .handlers.generic import handle_generic
 from .handlers.kb_handlers import handle_generic_kb, handle_price, handle_product_spec
 from .kb import KnowledgeBase
-from .llm import LLMClient
-from .normalizers import answer_preserves_tokens, extract_hard_tokens, normalize_text
+from .llm import LLMClient, grounding_text
+from .normalizers import (
+    answer_keeps_polarity,
+    answer_preserves_tokens,
+    answer_within_tokens,
+    extract_hard_tokens,
+    normalize_text,
+)
 from .router import FastRoute, classify_fast, needs_llm_classification
 from .schemas import AskResponse
 
@@ -109,8 +115,14 @@ class Orchestrator:
         if ctx.remaining() < self.settings.compose_min_remaining_seconds:
             return deterministic
         required = extract_hard_tokens(deterministic)
+        allowed = extract_hard_tokens(grounding_text(deterministic, evidence.facts))
         composed = self.llm.compose(question, deterministic, evidence.facts)
-        if composed and answer_preserves_tokens(composed, required):
+        if (
+            composed
+            and answer_preserves_tokens(composed, required)
+            and answer_within_tokens(composed, allowed)
+            and answer_keeps_polarity(composed, deterministic)
+        ):
             return composed
         return deterministic
 

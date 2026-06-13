@@ -19,12 +19,15 @@ COMPOSE_PROMPT = (
     "You rewrite a verified internal answer for Al Dente S.r.l. into clear, natural prose. "
     "Use ONLY the verified answer and the evidence provided; never add, infer, or estimate "
     "any fact. Preserve every ID, code, date, currency figure and number exactly as given. "
+    "Never change the verdict: keep yes/no, below/above and late/on-time exactly as stated, "
+    "and never add or remove a negation. "
     "Reply in the same language as the question, in 1-4 concise sentences of plain text - "
     "no markdown, no headings, no bullet lists. Output only the answer text."
 )
 
 FACTS_LIST_CAP = 8
 FACTS_JSON_CAP = 4000
+QUESTION_CAP = 2000
 
 
 def _curate_facts(facts: Any) -> dict[str, Any]:
@@ -47,6 +50,19 @@ def _curate_facts(facts: Any) -> dict[str, Any]:
         else:
             curated[key] = value
     return curated
+
+
+def _curated_json(facts: Any) -> str:
+    return json.dumps(_curate_facts(facts), default=str)[:FACTS_JSON_CAP]
+
+
+def grounding_text(anchor: str, facts: Any) -> str:
+    """Exact factual material the model is allowed to draw on.
+
+    Used both to build the prompt and (by the orchestrator) to compute the set of
+    hard tokens a composed answer may legitimately contain.
+    """
+    return f"{anchor}\n{_curated_json(facts)}"
 
 
 class LLMClient:
@@ -85,7 +101,7 @@ class LLMClient:
                     {
                         "role": "user",
                         "content": (
-                            f"Question: {question}\n"
+                            f"Question: {question[:QUESTION_CAP]}\n"
                             'Schema: {"intent":"lookup|aggregate|multi_source|artifact|trap_or_unknown",'
                             '"verticale_hint":"crm|erp|calls|kb|null","entities":{'
                             '"customer_names":[],"customer_ids":[],"skus":[],"lot_ids":[],'
@@ -127,11 +143,10 @@ class LLMClient:
         """
         if not self._client or not self.settings.model:
             return ""
-        curated = json.dumps(_curate_facts(facts), default=str)[:FACTS_JSON_CAP]
         prompt = (
-            f"Question: {question}\n"
+            f"Question: {question[:QUESTION_CAP]}\n"
             f"Verified answer: {anchor}\n"
-            f"Evidence: {curated}"
+            f"Evidence: {_curated_json(facts)}"
         )
         try:
             response = self._client.with_options(

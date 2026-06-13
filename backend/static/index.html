@@ -71,7 +71,8 @@
     /* ---- Graph view ---- */
     #viewGraph{ overflow:hidden; }
     .graph-stage{ position:absolute; inset:0; }
-    #cy{ position:absolute; inset:0; }
+    #atmo{ position:absolute; inset:0; width:100%; height:100%; z-index:0; pointer-events:none; }
+    #cy{ position:absolute; inset:0; z-index:1; }
     .graph-skeleton{ position:absolute; inset:0; display:grid; place-items:center; }
     .skeleton-orbit{ width:120px; height:120px; border-radius:50%; border:1px dashed rgba(232,184,91,.25); position:relative; animation:rotate 9s linear infinite; }
     .skeleton-orbit i{ position:absolute; width:14px; height:14px; border-radius:50%; background:rgba(232,184,91,.5); top:-7px; left:53px; }
@@ -286,6 +287,7 @@
   <!-- ===================== KNOWLEDGE GRAPH VIEW ===================== -->
   <section class="view" id="viewGraph" role="tabpanel" aria-label="Knowledge graph">
     <div class="graph-stage" id="graphStage">
+      <canvas id="atmo"></canvas>
       <div id="cy"></div>
       <div class="graph-skeleton" id="graphSkeleton"><div class="skeleton-orbit"><i></i><i></i><i></i><i></i></div></div>
 
@@ -400,6 +402,77 @@
   const esc = (v) => { const d = document.createElement("div"); d.textContent = v == null ? "" : String(v); return d.innerHTML; };
   const colorOf = (t) => (TYPES[t] || {}).color || "#e8b85b";
 
+  const REDUCED = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+
+  // ---------------------------------------------------------------------------
+  // Color utils + per-type "glowing gem" SVG sprites (baked once, cached)
+  // ---------------------------------------------------------------------------
+  function _rgb(c) {
+    c = String(c).replace("#", "");
+    if (c.length === 3) c = c.split("").map((x) => x + x).join("");
+    return [parseInt(c.slice(0, 2), 16), parseInt(c.slice(2, 4), 16), parseInt(c.slice(4, 6), 16)];
+  }
+  function _hex(r) { return "#" + r.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join(""); }
+  function mix(a, b, t) { const A = _rgb(a), B = _rgb(b); return _hex([0, 1, 2].map((i) => A[i] + (B[i] - A[i]) * t)); }
+  const lighten = (c, t) => mix(c, "#ffffff", t);
+  const darken = (c, t) => mix(c, "#000000", t);
+  const isEmber = (d) => (d.type === "product" || d.type === "raw_material") && d.below_min === true;
+  const glowOf = (d) => (isEmber(d) ? "#ff5a2c" : lighten(colorOf(d.type), 0.1));
+
+  // Geometry for each node type, centred in a 0..100 viewBox (core radius ~22).
+  function shapeMarkup(type, attr, transform) {
+    const t = transform ? ` transform="${transform}"` : "";
+    const a = `${attr}${t} stroke-linejoin="round"`;
+    switch (type) {
+      case "product": return `<circle cx="50" cy="50" r="22" ${a}/>`;
+      case "customer":
+      case "order":
+      case "kb_doc": return `<rect x="28" y="30" width="44" height="40" rx="10" ${a}/>`;
+      case "supplier": return `<polygon points="50,27 70,38.5 70,61.5 50,73 30,61.5 30,38.5" ${a}/>`;
+      case "raw_material": return `<polygon points="50,26 74,50 50,74 26,50" ${a}/>`;
+      case "opportunity": return `<polygon points="50,27 73,71 27,71" ${a}/>`;
+      case "lot": return `<rect x="31" y="28" width="38" height="44" rx="15" ${a}/>`;
+      case "call": return `<path d="M31,33 L60,33 L71,50 L60,67 L31,67 Z" ${a}/>`;
+      case "hub": return `<polygon points="50,23 57.05,40.29 75.68,41.66 61.41,53.71 65.87,71.84 50,62 34.13,71.84 38.59,53.71 24.32,41.66 42.95,40.29" ${a}/>`;
+      default: return `<circle cx="50" cy="50" r="22" ${a}/>`;
+    }
+  }
+  const _spriteCache = {};
+  function nodeSprite(type, ember) {
+    const key = type + (ember ? "!" : "");
+    if (_spriteCache[key]) return _spriteCache[key];
+    const base = colorOf(type);
+    const light = lighten(base, 0.6);
+    const dark = darken(base, 0.42);
+    const rim = darken(base, 0.55);
+    const glow = ember ? "#ff5a2c" : lighten(base, 0.22);
+    const glowOp = ember ? 0.82 : 0.5;
+    const glowBlur = ember ? 6 : 5;
+    const body = shapeMarkup(type, `fill="url(#bd)" stroke="${rim}" stroke-width="1.4"`);
+    const aura = shapeMarkup(type, `fill="${glow}"`, "translate(50 50) scale(1.16) translate(-50 -50)");
+    const svg =
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">` +
+        `<defs>` +
+          `<radialGradient id="bd" cx="50%" cy="50%" r="62%" fx="36%" fy="30%">` +
+            `<stop offset="0%" stop-color="${light}"/>` +
+            `<stop offset="46%" stop-color="${base}"/>` +
+            `<stop offset="100%" stop-color="${dark}"/>` +
+          `</radialGradient>` +
+          `<radialGradient id="sp" cx="50%" cy="50%" r="50%">` +
+            `<stop offset="0%" stop-color="#ffffff" stop-opacity="0.85"/>` +
+            `<stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>` +
+          `</radialGradient>` +
+          `<filter id="gl" x="-120%" y="-120%" width="340%" height="340%"><feGaussianBlur stdDeviation="${glowBlur}"/></filter>` +
+        `</defs>` +
+        `<g filter="url(#gl)" opacity="${glowOp}">${aura}</g>` +
+        body +
+        `<ellipse cx="42" cy="37" rx="12" ry="8" fill="url(#sp)" opacity="0.5"/>` +
+      `</svg>`;
+    const uri = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+    _spriteCache[key] = uri;
+    return uri;
+  }
+
   // ---------------------------------------------------------------------------
   // Shared ask service + answer rendering (used by Spotlight and Chat)
   // ---------------------------------------------------------------------------
@@ -465,6 +538,10 @@
   let cy = null;
   let pinned = null;
   let activeFilter = null;
+  let hubEles = null;
+  let emberEles = null;
+  let ignited = false;
+  let lodOn = false;
   const cyEl = $("cy");
   const tooltip = $("tooltip");
   const inspector = $("inspector");
@@ -486,38 +563,68 @@
 
   const cyStyle = [
     { selector: "node", style: {
-        "background-color": (e) => colorOf(e.data("type")),
-        "shape": (e) => (TYPES[e.data("type")] || {}).shape || "ellipse",
+        // The whole gem (gradient + gloss + glow) is baked into an SVG sprite so
+        // the glow can overflow the node box without being clipped.
+        "background-image": (e) => nodeSprite(e.data("type"), isEmber(e.data())),
+        "background-fit": "none",
+        "background-width": "220%", "background-height": "220%",
+        "background-image-containment": "over",
+        "background-clip": "none",
+        "background-position-x": "50%", "background-position-y": "50%",
+        "background-opacity": 0,
+        "bounds-expansion": 44,
+        "shape": "ellipse",
         "width": sizeFor, "height": sizeFor,
         "label": "data(label)", "color": "#f3e7d2",
         "font-family": "Manrope, sans-serif",
         "font-size": (e) => (e.data("type") === "hub" ? 13 : 10),
         "font-weight": (e) => (e.data("type") === "hub" ? 700 : 600),
-        "text-valign": "bottom", "text-halign": "center", "text-margin-y": 6,
+        "text-valign": "bottom", "text-halign": "center", "text-margin-y": 9,
         "text-wrap": "wrap", "text-max-width": 116,
-        "text-outline-color": "#140f0b", "text-outline-width": 2.4,
+        "text-outline-color": "#140f0b", "text-outline-width": 2.6,
         "text-opacity": (e) => (ALWAYS_LABEL.has(e.data("type")) ? 0.92 : 0),
-        "border-width": 2, "border-color": "#140f0b",
-        "transition-property": "opacity, border-color, border-width", "transition-duration": "140ms",
+        // underlay = animated halo channel (breathing hubs / stock-risk embers / ignite flash)
+        "underlay-color": (e) => glowOf(e.data()),
+        "underlay-shape": "ellipse",
+        "underlay-padding": 3,
+        "underlay-opacity": 0,
+        // overlay = hover / selection emphasis (kept separate from the halo channel)
+        "overlay-color": "#ffd98c", "overlay-opacity": 0, "overlay-padding": 8, "overlay-shape": "ellipse",
+        "transition-property": "opacity, overlay-opacity, overlay-padding", "transition-duration": "150ms",
     }},
+    { selector: "node.lod", style: { "text-opacity": 0 } },
     { selector: "edge", style: {
-        "width": 1.1, "line-color": "rgba(246,236,217,.13)", "curve-style": "bezier",
-        "target-arrow-shape": "triangle", "target-arrow-color": "rgba(246,236,217,.22)", "arrow-scale": 0.7,
-        "opacity": 0.55, "label": "data(label)", "font-family": "DM Mono, monospace", "font-size": 7,
+        "width": 1.3, "curve-style": "bezier",
+        "line-fill": "linear-gradient",
+        "line-gradient-stop-colors": (e) => `${colorOf(e.source().data("type"))} ${colorOf(e.target().data("type"))}`,
+        "line-gradient-stop-positions": "0% 100%",
+        "target-arrow-shape": "triangle",
+        "target-arrow-color": (e) => mix(colorOf(e.target().data("type")), "#140f0b", 0.15),
+        "arrow-scale": 0.6,
+        "opacity": 0.26, "label": "data(label)", "font-family": "DM Mono, monospace", "font-size": 7,
         "color": "#b9a98f", "text-opacity": 0, "text-rotation": "autorotate",
         "text-background-color": "#140f0b", "text-background-opacity": 0.82, "text-background-padding": 2,
-        "transition-property": "opacity, line-color, width", "transition-duration": "140ms",
+        "transition-property": "opacity, width", "transition-duration": "150ms",
     }},
-    { selector: ".hl", style: { "text-opacity": 0.95 } },
-    { selector: "edge.hl", style: { "line-color": "#e8b85b", "target-arrow-color": "#e8b85b", "opacity": 0.95, "width": 2, "text-opacity": 1, "z-index": 30 } },
-    { selector: "node.sel", style: { "border-color": "#ffd98c", "border-width": 4, "text-opacity": 1 } },
-    { selector: "node.match", style: { "border-color": "#ffd98c", "border-width": 4, "text-opacity": 1 } },
-    { selector: ".dim", style: { "opacity": 0.07 } },
+    { selector: ".hl", style: { "text-opacity": 0.97 } },
+    { selector: "edge.hl", style: {
+        "line-fill": "solid", "line-color": "#ffcf7a", "target-arrow-color": "#ffcf7a",
+        "opacity": 0.96, "width": 2.4, "line-style": "dashed", "line-dash-pattern": [9, 7],
+        "text-opacity": 1, "z-index": 30,
+    }},
+    { selector: "node.hovered", style: {
+        "overlay-color": (e) => lighten(colorOf(e.data("type")), 0.3),
+        "overlay-opacity": 0.16, "overlay-padding": 7, "text-opacity": 0.98, "z-index": 20,
+    }},
+    { selector: "node.sel", style: { "overlay-color": "#ffd98c", "overlay-opacity": 0.24, "overlay-padding": 9, "text-opacity": 1, "z-index": 40 } },
+    { selector: "node.match", style: { "overlay-color": "#ffd98c", "overlay-opacity": 0.24, "overlay-padding": 9, "text-opacity": 1, "z-index": 40 } },
+    { selector: ".dim", style: { "opacity": 0.08 } },
   ];
 
   function highlight(node) {
     const hood = node.closedNeighborhood();
     cy.batch(() => { cy.elements().addClass("dim"); hood.removeClass("dim").addClass("hl"); node.addClass("sel"); });
+    startFlow();
   }
   function highlightNodes(ids) {
     if (!cy || !ids.length) return;
@@ -529,9 +636,146 @@
       eles.removeClass("dim").addClass("hl");
       ids.forEach((id) => { const n = cy.getElementById(id); if (n && n.nonempty()) n.addClass("sel"); });
     });
+    startFlow();
     cy.animate({ fit: { eles, padding: 80 } }, { duration: 650 });
   }
   function clearHighlight() { if (cy) cy.batch(() => cy.elements().removeClass("dim hl sel")); }
+
+  // ---------------------------------------------------------------------------
+  // Motion engine: ambient breathing / stock embers, edge energy-flow, ignite
+  // ---------------------------------------------------------------------------
+  const graphVisible = () => document.body.dataset.view === "graph" && !document.hidden;
+
+  let pulseRAF = null, pulseLast = 0;
+  function pulseTick(ts) {
+    pulseRAF = requestAnimationFrame(pulseTick);
+    if (ts - pulseLast < 45) return;          // ~22fps is plenty for a glow
+    pulseLast = ts;
+    if (!cy || !graphVisible() || cy.zoom() < 0.3) return;
+    const t = ts / 1000;
+    const s = (Math.sin(t * 1.05) + 1) / 2;   // slow, for hubs
+    const e = (Math.sin(t * 4.2) + 1) / 2;    // fast, hot, for embers
+    cy.batch(() => {
+      if (hubEles) hubEles.style({ "underlay-opacity": 0.12 + 0.22 * s, "underlay-padding": 6 + 7 * s });
+      if (emberEles) emberEles.style({ "underlay-opacity": 0.4 + 0.42 * e, "underlay-padding": 6 + 9 * e });
+    });
+  }
+  function startPulse() { if (!REDUCED && pulseRAF == null) pulseRAF = requestAnimationFrame(pulseTick); }
+
+  let flowRAF = null;
+  function flowTick(ts) {
+    if (!cy || REDUCED || !graphVisible() || cy.edges(".hl").empty()) { flowRAF = null; return; }
+    flowRAF = requestAnimationFrame(flowTick);
+    cy.edges(".hl").style("line-dash-offset", -((ts / 55) % 16));
+  }
+  function startFlow() { if (!REDUCED && flowRAF == null) flowRAF = requestAnimationFrame(flowTick); }
+
+  function igniteGraph() {
+    if (ignited || !cy) return;
+    ignited = true;
+    if (REDUCED) {
+      if (hubEles) hubEles.style({ "underlay-opacity": 0.2, "underlay-padding": 9 });
+      if (emberEles) emberEles.style({ "underlay-opacity": 0.55, "underlay-padding": 10 });
+      return;
+    }
+    const nodes = cy.nodes(), edges = cy.edges();
+    const bb = cy.elements().boundingBox();
+    const cx = (bb.x1 + bb.x2) / 2, cyy = (bb.y1 + bb.y2) / 2;
+    cy.batch(() => { nodes.style("opacity", 0); edges.style("opacity", 0); });
+    const arr = nodes.toArray()
+      .map((n) => { const p = n.position(); return { n, d: Math.hypot(p.x - cx, p.y - cyy) }; })
+      .sort((a, b) => a.d - b.d);
+    const maxd = (arr.length ? arr[arr.length - 1].d : 0) || 1;
+    arr.forEach((o) => {
+      const delay = (o.d / maxd) * 620;
+      setTimeout(() => {
+        o.n.animate(
+          { style: { "opacity": 1, "underlay-opacity": 0.55, "underlay-padding": 13 } },
+          { duration: 300, easing: "ease-out", complete: () => {
+            o.n.removeStyle("opacity");
+            o.n.animate({ style: { "underlay-opacity": 0, "underlay-padding": 3 } }, { duration: 520 });
+          } }
+        );
+      }, delay);
+    });
+    setTimeout(() => edges.animate(
+      { style: { "opacity": 0.26 } },
+      { duration: 600, easing: "ease-out", complete: () => edges.removeStyle("opacity") }
+    ), 420);
+    setTimeout(startPulse, 1150);
+  }
+
+  function onGraphVisible() { startAtmo(); if (cy) igniteGraph(); }
+
+  // ---------------------------------------------------------------------------
+  // Living atmosphere: a slow warm nebula + drifting spore motes behind the graph
+  // ---------------------------------------------------------------------------
+  const atmo = $("atmo");
+  const actx = atmo ? atmo.getContext("2d") : null;
+  const ATMO_DPR = Math.min(window.devicePixelRatio || 1, 2);
+  let motes = [], atmoRAF = null, atmoLast = 0, atmoW = 0, atmoH = 0, moteImg = null;
+  function makeMote() {
+    const c = document.createElement("canvas"); c.width = c.height = 32;
+    const x = c.getContext("2d");
+    const g = x.createRadialGradient(16, 16, 0, 16, 16, 16);
+    g.addColorStop(0, "rgba(255,216,150,1)");
+    g.addColorStop(0.5, "rgba(255,200,130,0.5)");
+    g.addColorStop(1, "rgba(255,200,130,0)");
+    x.fillStyle = g; x.fillRect(0, 0, 32, 32); moteImg = c;
+  }
+  function atmoResize() {
+    if (!atmo || !actx) return;
+    const r = atmo.getBoundingClientRect();
+    atmoW = r.width; atmoH = r.height;
+    if (!atmoW || !atmoH) return;
+    atmo.width = Math.round(atmoW * ATMO_DPR); atmo.height = Math.round(atmoH * ATMO_DPR);
+    actx.setTransform(ATMO_DPR, 0, 0, ATMO_DPR, 0, 0);
+    if (!motes.length) {
+      const n = Math.round(Math.min(64, Math.max(28, atmoW / 26)));
+      for (let i = 0; i < n; i++) motes.push({
+        x: Math.random() * atmoW, y: Math.random() * atmoH,
+        r: 0.5 + Math.random() * 1.7,
+        vx: (Math.random() - 0.5) * 0.12, vy: (Math.random() - 0.5) * 0.12,
+        a: 0.12 + Math.random() * 0.34, tw: Math.random() * Math.PI * 2,
+      });
+    }
+  }
+  function atmoDraw(ts) {
+    if (!actx || !atmoW || !atmoH) return;
+    actx.clearRect(0, 0, atmoW, atmoH);
+    const t = ts / 9000;
+    const g1 = actx.createRadialGradient(
+      atmoW * (0.5 + 0.06 * Math.sin(t)), atmoH * (0.42 + 0.05 * Math.cos(t * 0.8)), 0,
+      atmoW * 0.5, atmoH * 0.5, Math.max(atmoW, atmoH) * 0.62
+    );
+    g1.addColorStop(0, "rgba(232,184,91,0.06)");
+    g1.addColorStop(0.5, "rgba(224,101,63,0.025)");
+    g1.addColorStop(1, "rgba(0,0,0,0)");
+    actx.fillStyle = g1; actx.fillRect(0, 0, atmoW, atmoH);
+    if (!moteImg) makeMote();
+    for (const m of motes) {
+      if (!REDUCED) { m.x += m.vx; m.y += m.vy; m.tw += 0.02; }
+      if (m.x < -12) m.x = atmoW + 12; if (m.x > atmoW + 12) m.x = -12;
+      if (m.y < -12) m.y = atmoH + 12; if (m.y > atmoH + 12) m.y = -12;
+      const a = m.a * (0.6 + 0.4 * Math.sin(m.tw));
+      actx.globalAlpha = a;
+      actx.drawImage(moteImg, m.x - m.r * 5, m.y - m.r * 5, m.r * 10, m.r * 10);
+    }
+    actx.globalAlpha = 1;
+  }
+  function atmoTick(ts) {
+    atmoRAF = requestAnimationFrame(atmoTick);
+    if (!graphVisible()) return;
+    if (ts - atmoLast < 33) return;            // ~30fps
+    atmoLast = ts; atmoDraw(ts);
+  }
+  function startAtmo() {
+    if (!actx) return;
+    atmoResize();
+    if (REDUCED) { atmoDraw(performance.now()); return; }
+    if (atmoRAF == null) atmoRAF = requestAnimationFrame(atmoTick);
+  }
+  window.addEventListener("resize", () => atmoResize());
 
   function tipFact(d) {
     if (d.below_min === true) return "Below minimum stock";
@@ -701,12 +945,17 @@
         layout: layoutOptions(),
       });
 
-      cy.on("mouseover", "node", (e) => { if (!pinned && !activeFilter && spotState !== "result") highlight(e.target); showTip(e); cyEl.style.cursor = "pointer"; });
+      hubEles = cy.nodes('[type = "hub"]');
+      emberEles = cy.nodes().filter((n) => isEmber(n.data()));
+
+      cy.on("mouseover", "node", (e) => { e.target.addClass("hovered"); if (!pinned && !activeFilter && spotState !== "result") highlight(e.target); showTip(e); cyEl.style.cursor = "pointer"; });
       cy.on("mousemove", "node", (e) => moveTip(e));
-      cy.on("mouseout", "node", () => { hideTip(); cyEl.style.cursor = "default"; if (!pinned && !activeFilter && spotState !== "result") clearHighlight(); });
+      cy.on("mouseout", "node", (e) => { e.target.removeClass("hovered"); hideTip(); cyEl.style.cursor = "default"; if (!pinned && !activeFilter && spotState !== "result") clearHighlight(); });
       cy.on("tap", "node", (e) => { highlight(e.target); openInspector(e.target.data()); });
       cy.on("tap", (e) => { if (e.target === cy) { pinned = null; clearHighlight(); closeInspector(); } });
+      cy.on("zoom", () => { const want = cy.zoom() < 0.24; if (want !== lodOn) { lodOn = want; cy.batch(() => (want ? cy.nodes().addClass("lod") : cy.nodes().removeClass("lod"))); } });
       cy.ready(() => setTimeout(() => cy.fit(cy.elements(), 55), 700));
+      if (graphVisible()) onGraphVisible();
     } catch (error) {
       console.error("Knowledge graph initialization failed", error);
       $("graphSkeleton").style.display = "none";
@@ -897,7 +1146,7 @@
     navChat.setAttribute("aria-selected", view === "chat");
     if (location.hash.slice(1) !== view) history.replaceState(null, "", "#" + view);
     if (view === "graph") {
-      setTimeout(() => { if (cy) { cy.resize(); cy.fit(cy.nodes(":visible"), 55); } }, 90);
+      setTimeout(() => { if (cy) { cy.resize(); cy.fit(cy.nodes(":visible"), 55); } onGraphVisible(); }, 90);
     } else {
       setTimeout(() => chatInput.focus(), 90);
     }
