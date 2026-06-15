@@ -1,9 +1,26 @@
 # Al Dente Company Brain - Starter
 
-Starter project for the Coding Agent Hackathon powered by Cursor. Build the **company brain** of Al Dente S.r.l.: an agent that answers questions about the company by orchestrating its CRM / ERP / call-log APIs and a knowledge base you build.
+![Al Dente Company Brain Dashboard](screen/full%20screen%20chat.png)
+
+Starter project for the Coding Agent Hackathon powered by Cursor. Build the **company brain** of Al Dente S.r.l.: an advanced AI agent that answers questions about the company by seamlessly orchestrating its CRM, ERP, and call-log APIs alongside a custom knowledge base.
 
 > **Read `BRIEF.md` first** (the challenge, evaluation, rules). Then **`AGENTS.md`** (full technical spec - Cursor reads it automatically as project context). `API.md` documents the company APIs; `SAMPLE_QUESTIONS.md` shows what the evaluator asks.
 > For deployment read `DEPLOY.md`; for the Docker fallback read `DOCKER.md`. This README is only setup and quick start.
+
+## 🌟 Key Features & Interface
+
+Our solution offers a rich, interactive user interface to explore Al Dente's company data:
+
+- **Intelligent Chat Interface**: Ask complex, multi-source questions and receive accurate, verifiable answers.
+- **Knowledge Graph Visualization**: Explore deep connections between customers, suppliers, products, and raw materials interactively.
+  ![Knowledge Graph](screen/full%20screen%20graph.png)
+  ![Node Details](screen/graph%20node.png)
+- **Spotlight Search**: Lightning-fast query interface for instant data access.
+  ![Spotlight Bar](screen/spotligh%20bar.png)
+  ![Spotlight Query](screen/spotlight%20query.png)
+- **Rich Artifacts**: Generate dynamic reports and documents (PDF, Excel, Word) on the fly.
+  ![Artifact Generation](screen/artifacts.png)
+
 
 ## Prerequisites
 

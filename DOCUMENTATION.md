@@ -1001,3 +1001,7 @@ full walkthrough.
     ~12/13 (customer lookup, negotiation-by-channel, inventory, and the SKU→BOM→supplier chain all resolve);
     offline unit checks confirm the new extraction/artifact behavior. **The router/extraction changes still
     need a redeploy to go live** (see `TO_SIMO_DO.md`).
+
+- **[2026-06-15 22:42]: Updated README.md with screenshots and professional copy**
+  - *Details*: Added a "Key Features & Interface" section to `README.md` to showcase the company brain UI capabilities. Included screenshots from the `screen/` directory (chat interface, knowledge graph, spotlight search, and artifact generation).
+  - *Tech Notes*: No source code or architectural changes. Only documentation enhancement for better visual presentation.
